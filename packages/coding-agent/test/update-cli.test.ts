@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as pluginCli from "@oh-my-pi/pi-coding-agent/cli/plugin-cli";
+import { resolveReleaseBinaryAsset } from "@oh-my-pi/pi-coding-agent/cli/release-metadata";
 import * as updateCli from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import {
 	buildBunInstallArgs,
@@ -25,7 +26,6 @@ import {
 	type RenameMigrationSteps,
 	replaceBinaryForUpdate,
 	resolveBunGlobalNodeModulesDirFromLocations,
-	resolveReleaseBinaryAsset,
 	resolveReleaseDist,
 	resolveReleaseRename,
 	resolveUpdateMethodForTest,

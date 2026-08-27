@@ -80,9 +80,13 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           UPSTREAM_VERSION: ${{ steps.base.outputs.version }}
         run: |
-          $version = (bun scripts/fork-release.ts validate-version $env:INPUT_VERSION $env:UPSTREAM_VERSION).Trim()
-          if ($LASTEXITCODE -ne 0 -or -not $version) {
-            throw "Requested version must exactly match the OMP version on canonical main"
+          $validationOutput = (bun scripts/fork-release.ts validate-version $env:INPUT_VERSION $env:UPSTREAM_VERSION 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release version validation failed: $validationOutput"
+          }
+          $version = $validationOutput
+          if (-not $version) {
+            throw "Release version validation returned no version"
           }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Validated exact fork release version v$version"

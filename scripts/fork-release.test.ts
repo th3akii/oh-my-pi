@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { $ } from "bun";
 import { compareVersions } from "../packages/utils/src/version";
 import {
 	FORK_REPOSITORY,
@@ -9,6 +11,8 @@ import {
 	validatePublishedForkRelease,
 	WINDOWS_BINARY_NAME,
 } from "./fork-release";
+
+const REPO_ROOT = path.join(import.meta.dir, "..");
 
 describe("fork release version validation", () => {
 	it("accepts stable semver and strips one leading v", () => {
@@ -23,6 +27,15 @@ describe("fork release version validation", () => {
 	it("requires the fork release to preserve the integrated upstream version", () => {
 		expect(validateForkReleaseVersion("v18.0.8", "18.0.8")).toBe("18.0.8");
 		expect(() => validateForkReleaseVersion("18.0.9", "18.0.8")).toThrow("must exactly match upstream base version");
+	});
+
+	it("validates the release version without loading native runtime dependencies", async () => {
+		const result = await $`bun scripts/fork-release.ts validate-version v18.0.8 18.0.8`
+			.cwd(REPO_ROOT)
+			.quiet()
+			.nothrow();
+		expect(result.exitCode).toBe(0);
+		expect(result.text().trim()).toBe("18.0.8");
 	});
 });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
-import { resolveReleaseBinaryAsset } from "../packages/coding-agent/src/cli/update-cli";
+import { resolveReleaseBinaryAsset } from "../packages/coding-agent/src/cli/release-metadata";
 
 export const FORK_REPOSITORY = "th3akii/oh-my-pi";
 export const WINDOWS_BINARY_NAME = "omp-windows-x64.exe";
