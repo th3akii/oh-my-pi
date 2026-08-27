@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { $ } from "bun";
 import { resolveCrossBuild } from "../packages/coding-agent/scripts/build-binary";
+import { conventionOutputPaths, resolveTargetLabels } from "./bazel-natives";
 
 const repoRoot = path.join(import.meta.dir, "..");
 
@@ -35,5 +36,13 @@ describe("Windows release binary target", () => {
 			arch: "x64",
 			target: "bun-windows-x64-baseline",
 		});
+	});
+
+	it("maps the Windows release target to the native artifact consumed by embedding", () => {
+		const host = { platform: "linux", arch: "x64", avx2: true };
+		expect(resolveTargetLabels(["win32-x64-baseline"], host)).toEqual(["//:natives-win32-x64-baseline"]);
+		expect(conventionOutputPaths(["win32-x64-baseline"], host)).toEqual([
+			"bazel-bin/natives-win32-x64-baseline/pi_natives.win32-x64-baseline.node",
+		]);
 	});
 });

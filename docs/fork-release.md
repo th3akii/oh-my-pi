@@ -36,25 +36,29 @@ After a human merges the sync PR, run **Fork Windows release** manually and
 enter the exact stable version already present on canonical `main` (an
 optional leading `v` is accepted). The workflow:
 
-1. verifies the checkout is exactly `origin/main`;
-2. reads the canonical OMP version from `packages/utils/package.json`;
-3. requires the input version to match that version and rejects an existing
+1. checks out canonical `main` on Ubuntu and builds the Windows native addon
+   with the existing `.github/actions/bazel-natives` machinery;
+2. checks out that exact source commit on `windows-2025` and verifies
+   `origin/main` has not moved;
+3. reads the canonical OMP version from `packages/utils/package.json`;
+4. requires the input version to match that version and rejects an existing
    fork Release or fork tag;
-4. verifies the corresponding official upstream tag is integrated;
-5. sets `RELEASE_TARGETS=win32-x64` and runs the existing
-   `bun run ci:release:build-binaries` machinery;
-6. runs the resulting executable with `--version`;
-7. creates a published, non-draft, non-prerelease Release containing exactly
+5. verifies the corresponding official upstream tag is integrated;
+6. downloads the prepared native addon, sets `RELEASE_TARGETS=win32-x64`, and
+   runs the existing `bun run ci:release:build-binaries` machinery;
+7. runs the resulting executable with `--version`;
+8. creates a published, non-draft, non-prerelease Release containing exactly
    `omp-windows-x64.exe`;
-8. reads the published GitHub API object and reuses the Phase 4 strict asset
+9. reads the published GitHub API object and reuses the Phase 4 strict asset
    validator, including the API-provided `sha256:<64 hex>` digest.
 
-The existing project build path is `scripts/ci-release-build-binaries.ts` →
-`packages/coding-agent/scripts/compile-binary.ts`; it already defines the
-`bun-windows-x64-baseline` target and the required output name. The new workflow
-runs this same command on `windows-2025` so the produced `.exe` is executed
-before publication. The existing upstream CI still cross-builds its Windows
-asset on Ubuntu; that path is unchanged.
+The native addon job is separate because the repository's Bazel Windows
+toolchain supports Linux/macOS execution hosts, not Windows execution hosts.
+
+The existing binary path remains `scripts/ci-release-build-binaries.ts` →
+`packages/coding-agent/scripts/compile-binary.ts`; it defines the
+`bun-windows-x64-baseline` target and `omp-windows-x64.exe` output. The upstream
+CI's existing Windows cross-build path remains unchanged.
 
 ## Build identity and versioning
 
