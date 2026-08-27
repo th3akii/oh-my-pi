@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, type Mock, spyOn, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, type Mock, spyOn, vi } from "bun:test";
 import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
@@ -37,10 +37,19 @@ import {
 	updateViaShimTakeover,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
+import { OFFICIAL_DISTRIBUTION, setDistributionForTest } from "@oh-my-pi/pi-coding-agent/config/distribution";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { getThemeByName, setThemeInstance } from "../src/modes/theme/theme";
 
+// This suite exercises the official updater end to end; pin the official
+// distribution so a fork build's committed distribution cannot reroute it.
+beforeAll(() => {
+	setDistributionForTest(OFFICIAL_DISTRIBUTION);
+});
+afterAll(() => {
+	setDistributionForTest(undefined);
+});
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {

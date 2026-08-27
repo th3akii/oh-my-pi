@@ -14,6 +14,7 @@ import { $env, $which, APP_NAME, compareVersions, isEnoent, VERSION } from "@oh-
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
+import { getDistribution, OFFICIAL_DISTRIBUTION } from "../config/distribution";
 import { settings } from "../config/settings";
 import { theme } from "../modes/theme/theme";
 import {
@@ -23,7 +24,6 @@ import {
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
 
-const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 const HOMEBREW_FORMULA = "can1357/tap/omp";
 const MISE_TOOL = "github:can1357/oh-my-pi";
@@ -186,12 +186,16 @@ export function shouldForceBinaryUpdate(
  * `options.allowPrerelease` is set, which the canary channel passes: canary
  * GitHub releases are published as prereleases, and the exact-tag match below
  * still pins the download to the specific requested version.
+ *
+ * `options.repo` names the repository the asset download URL must match. It
+ * defaults to the official repository; the updater threads the active
+ * distribution's repository through {@link getReleaseBinaryAsset}.
  */
 export function resolveReleaseBinaryAsset(
 	release: unknown,
 	expectedTag: string,
 	binaryName: string,
-	options: { allowPrerelease?: boolean } = {},
+	options: { allowPrerelease?: boolean; repo?: string } = {},
 ): ReleaseBinaryAsset {
 	if (!isRecord(release)) {
 		throw new Error("Invalid GitHub release metadata");
@@ -229,7 +233,7 @@ export function resolveReleaseBinaryAsset(
 		throw new Error(`GitHub release asset ${binaryName} has an unsupported digest`);
 	}
 
-	const expectedUrl = `https://github.com/${REPO}/releases/download/${expectedTag}/${binaryName}`;
+	const expectedUrl = `https://github.com/${options.repo ?? OFFICIAL_DISTRIBUTION.repo}/releases/download/${expectedTag}/${binaryName}`;
 	if (asset.browser_download_url !== expectedUrl) {
 		throw new Error(`GitHub release asset ${binaryName} has an unexpected download URL`);
 	}
@@ -257,10 +261,13 @@ async function getReleaseBinaryAsset(
 
 	let response: Response;
 	try {
-		response = await fetchImpl(`${GITHUB_API}/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`, {
-			headers,
-			signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
-		});
+		response = await fetchImpl(
+			`${GITHUB_API}/repos/${getDistribution().repo}/releases/tags/${encodeURIComponent(tag)}`,
+			{
+				headers,
+				signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
+			},
+		);
 	} catch (err) {
 		if (isTimeoutError(err)) {
 			throw new Error("Timed out fetching GitHub release metadata after 30s", { cause: err });
@@ -276,8 +283,10 @@ async function getReleaseBinaryAsset(
 	if (!response.ok) {
 		throw new Error(`Failed to fetch GitHub release metadata: ${response.statusText}`);
 	}
-
-	return resolveReleaseBinaryAsset(await response.json(), tag, binaryName, { allowPrerelease });
+	return resolveReleaseBinaryAsset(await response.json(), tag, binaryName, {
+		allowPrerelease,
+		repo: getDistribution().repo,
+	});
 }
 
 export interface VerifiedBinaryDownloadOptions {
@@ -792,17 +801,23 @@ async function fetchLatestManifest(
 }
 
 /**
- * Get the latest release info from the npm registry, following `omp.rename`
+ * Get the latest release info for the active distribution. Under the official
+ * npm distribution this reads the npm registry, following `omp.rename`
  * pointers ({@link resolveReleaseRename}) when the package has moved to a new
- * npm name. Version, dist, and install names all come from the final manifest
- * in the chain. Uses npm instead of GitHub API to avoid unauthenticated rate
- * limiting.
+ * npm name; version, dist, and install names all come from the final manifest
+ * in the chain. npm is used instead of the GitHub API to avoid unauthenticated
+ * rate limiting. Under a `github-releases` distribution (fork builds) it reads
+ * {@link getLatestGithubRelease} instead.
  */
 export async function getLatestRelease(
 	options: { timeoutMs?: number; channel?: UpdateChannel } = {},
 ): Promise<ReleaseInfo> {
 	const timeoutMs = options.timeoutMs ?? RELEASE_METADATA_TIMEOUT_MS;
 	const channel = options.channel ?? "stable";
+	const distribution = getDistribution();
+	if (distribution.discovery === "github-releases") {
+		return getLatestGithubRelease(distribution.repo, timeoutMs);
+	}
 	const packages: ReleasePackages = { ...CURRENT_PACKAGES };
 	const visited = new Set([packages.pkg]);
 	let latest = await fetchLatestManifest(packages.pkg, timeoutMs, channel);
@@ -820,6 +835,68 @@ export async function getLatestRelease(
 		version: latest.version,
 		dist: resolveReleaseDist(latest.manifest),
 		packages,
+	};
+}
+
+/**
+ * Get the latest stable release from a `github-releases` distribution source
+ * (fork builds). The `releases/latest` endpoint only ever returns a published,
+ * non-draft, non-prerelease release of the configured repository, so the
+ * resolved version is an actual fork release — never an upstream one. The
+ * draft/prerelease flags and the `v<semver>` tag shape are re-validated so
+ * malformed metadata fails instead of installing. Releases from this source
+ * are marked `dist: "binary"`: a fork has no npm package, and the flag forces
+ * the existing binary update path so a fork install can never be routed into
+ * an official package-manager update.
+ */
+async function getLatestGithubRelease(repo: string, timeoutMs: number, fetchImpl: Fetch = fetch): Promise<ReleaseInfo> {
+	const headers: Record<string, string> = {
+		Accept: "application/vnd.github+json",
+		"X-GitHub-Api-Version": "2022-11-28",
+	};
+	const githubToken = $env.GITHUB_TOKEN || $env.GH_TOKEN;
+	if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+
+	let response: Response;
+	try {
+		response = await fetchImpl(`${GITHUB_API}/repos/${repo}/releases/latest`, {
+			headers,
+			signal: withTimeoutSignal(timeoutMs),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error(`Timed out fetching ${repo} release info after ${Math.round(timeoutMs / 1000)}s`, {
+				cause: err,
+			});
+		}
+		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+		throw err;
+	}
+	if ((response.status === 403 && !githubToken) || response.status === 429) {
+		throw new Error(
+			"GitHub API rate limit exceeded while fetching release metadata; retry later or set GITHUB_TOKEN or GH_TOKEN",
+		);
+	}
+	if (!response.ok) {
+		throw new Error(`Failed to fetch ${repo} release info: ${response.statusText}`);
+	}
+
+	const data: unknown = await response.json();
+	if (!isRecord(data)) {
+		throw new Error(`Malformed GitHub release metadata for ${repo}`);
+	}
+	if (data.draft !== false || data.prerelease !== false) {
+		throw new Error(`Latest ${repo} release is not a published stable release`);
+	}
+	const tag = data.tag_name;
+	if (typeof tag !== "string" || !/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
+		throw new Error(`Malformed GitHub release tag for ${repo}: ${String(tag)}`);
+	}
+	return {
+		tag,
+		version: tag.slice(1),
+		dist: "binary",
+		packages: { ...CURRENT_PACKAGES },
 	};
 }
 
@@ -1911,11 +1988,30 @@ export async function updateViaShimTakeover(
  * Forces the installer's binary mode (`--binary` / `-Binary`): the default
  * mode prefers a bun-based install whenever bun is present, which would send
  * a user recovering from a binary-only release straight back through bun.
+ * A fork distribution must never point at the official installer (it would
+ * reinstall the official build), so it directs to the fork's release assets.
  */
 function installerHint(): string {
+	const distribution = getDistribution();
+	if (distribution.discovery === "github-releases") {
+		return `download the ${APP_NAME} binary from https://github.com/${distribution.repo}/releases`;
+	}
 	return process.platform === "win32"
 		? "& ([scriptblock]::Create((irm https://omp.sh/install.ps1))) -Binary"
 		: "curl -fsSL https://omp.sh/install | sh -s -- --binary";
+}
+
+/**
+ * Fork distributions ship binaries only — no npm package, Homebrew formula, or
+ * mise tool exists for them — so package-manager and Nix routes would install
+ * the official upstream build. Returns the reason a method must be blocked, or
+ * undefined when the method is safe for a fork update (bun/npm script-shim
+ * takeover and in-place binary replacement).
+ */
+export function forkUnsupportedMethodMessage(method: UpdateMethod): string | undefined {
+	if (method !== "brew" && method !== "mise" && method !== "nix") return undefined;
+	const distribution = getDistribution();
+	return `The fork distribution only supports binary updates; a ${method} install would pull the official build. Download the new ${APP_NAME} binary from https://github.com/${distribution.repo}/releases.`;
 }
 
 /** Persisted channel, or undefined when settings are unavailable (SDK/test embedding without `Settings.init()`). */
@@ -1945,10 +2041,15 @@ export async function runUpdateCommand(opts: {
 	channel?: UpdateChannel;
 }): Promise<void> {
 	console.log(chalk.dim(`Current version: ${VERSION}`));
+	const forkMode = getDistribution().discovery === "github-releases";
 	const persistedChannel = readPersistedChannel() ?? "stable";
-	const channel = opts.channel ?? persistedChannel;
-	const isChannelSwitch = opts.channel !== undefined && opts.channel !== persistedChannel;
-	if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
+	// A fork distribution has a single stable GitHub-release line: channels and
+	// channel switching are meaningless there and must not reach the fork source.
+	const channel = forkMode ? "stable" : (opts.channel ?? persistedChannel);
+	const isChannelSwitch = !forkMode && opts.channel !== undefined && opts.channel !== persistedChannel;
+	if (forkMode && opts.channel === "canary") {
+		console.log(chalk.yellow("The fork distribution has no canary channel; using fork stable releases."));
+	} else if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
 
 	// Check for updates
 	let release: ReleaseInfo;
@@ -1995,6 +2096,11 @@ export async function runUpdateCommand(opts: {
 		const forceBinary = shouldForceBinaryUpdate(release);
 		const allowPrerelease = channel === "canary";
 		const target = await resolveUpdateTarget({ allowPackageManagers: !forceBinary });
+		const forkBlockReason = forkMode ? forkUnsupportedMethodMessage(target.method) : undefined;
+		if (forkBlockReason) {
+			console.log(chalk.yellow(forkBlockReason));
+			return;
+		}
 		if (channel === "canary" && (target.method === "nix" || target.method === "brew" || target.method === "mise")) {
 			console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
 			return;
