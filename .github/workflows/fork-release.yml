@@ -96,15 +96,31 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Absence is the expected result for both probes; capture their
+          # statuses so PowerShell does not return gh/git's nonzero code.
           $tag = "v$env:RELEASE_VERSION"
+          $missingReleaseExitCode = 1
+          $missingTagExitCode = 2
+
           gh release view $tag --repo $env:FORK_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $releaseStatus = $LASTEXITCODE
+          if ($releaseStatus -eq 0) {
             throw "GitHub release $tag already exists; refusing to overwrite it"
           }
+          if ($releaseStatus -ne $missingReleaseExitCode) {
+            throw "Could not check whether GitHub release $tag exists (exit code $releaseStatus)"
+          }
+
           git ls-remote --exit-code origin "refs/tags/$tag" *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $tagStatus = $LASTEXITCODE
+          if ($tagStatus -eq 0) {
             throw "Fork tag $tag already exists; refusing to reuse it"
           }
+          if ($tagStatus -ne $missingTagExitCode) {
+            throw "Could not check whether fork tag $tag exists (exit code $tagStatus)"
+          }
+
+          $global:LASTEXITCODE = 0
 
       - name: Verify integrated upstream base release
         shell: pwsh
