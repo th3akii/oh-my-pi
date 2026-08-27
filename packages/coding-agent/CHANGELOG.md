@@ -4,7 +4,7 @@
 
 ### Added
 
-- Extensions can now subscribe to `tool_approval_review`, an advisory review emitted after final tool-input resolution but before the native approval selector; a unanimous `{ decision: "approve" }` from all subscribed handlers skips only an eligible mode-derived approval prompt, while any other outcome keeps the native prompt path unchanged.
+- Extensions can now subscribe to `tool_approval_review`, an advisory review emitted after final tool-input resolution but before the native approval selector; a unanimous `{ decision: "approve" }` skips the eligible mode-derived prompt, `{ decision: "deny" }` rejects through the native policy-denial path, and other outcomes keep the native prompt path unchanged.
 
 ## [18.0.8] - 2026-08-27
 
