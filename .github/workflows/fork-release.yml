@@ -129,15 +129,18 @@ jobs:
         run: |
           git remote add upstream https://github.com/can1357/oh-my-pi.git
           $tag = "v$env:UPSTREAM_VERSION"
-          git ls-remote --exit-code --tags upstream "refs/tags/$tag" *> $null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Canonical main version $env:UPSTREAM_VERSION is not an official upstream release"
+          $tagProbe = (git ls-remote --exit-code --tags upstream "refs/tags/$tag" 2>&1 | Out-String).Trim()
+          $tagStatus = $LASTEXITCODE
+          if ($tagStatus -ne 0) {
+            throw "Canonical main version $env:UPSTREAM_VERSION is not an official upstream release: $tagProbe"
           }
-          git fetch upstream "refs/tags/$tag:refs/tags/upstream-$tag" *> $null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not fetch official upstream tag $tag"
+          $upstreamRef = "refs/remotes/upstream/release-$tag"
+          git fetch --no-tags upstream "+refs/tags/$tag:$upstreamRef"
+          $fetchStatus = $LASTEXITCODE
+          if ($fetchStatus -ne 0) {
+            throw "Could not fetch official upstream tag $tag (exit code $fetchStatus)"
           }
-          git merge-base --is-ancestor "refs/tags/upstream-$tag" HEAD *> $null
+          git merge-base --is-ancestor $upstreamRef HEAD *> $null
           if ($LASTEXITCODE -ne 0) {
             throw "Official upstream release $tag is not integrated into canonical fork main"
           }
