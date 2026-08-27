@@ -1,3 +1,11 @@
+import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+
+/**
+ * Build-only compile define. Published binaries replace this expression with a
+ * literal; source launches without a commit remain unbranded.
+ */
+const COMPILED_BUILD_COMMIT = process.env.PI_BUILD_COMMIT?.trim() || undefined;
+
 /**
  * Distribution / release-source configuration.
  *
@@ -19,6 +27,8 @@ export interface DistributionSource {
 	discovery: ReleaseDiscovery;
 	/** GitHub `owner/repo` that owns the binary release assets. */
 	repo: string;
+	/** Immutable distribution label embedded in fork release binaries. */
+	identity?: string;
 }
 
 /** Official upstream distribution. */
@@ -34,10 +44,21 @@ export const OFFICIAL_DISTRIBUTION: DistributionSource = {
 const FORK_DISTRIBUTION: DistributionSource | undefined = {
 	discovery: "github-releases",
 	repo: "th3akii/oh-my-pi",
+	identity: "th3akii/oh-my-pi",
 };
 
 /** The distribution this build belongs to. */
 export const DISTRIBUTION: DistributionSource = FORK_DISTRIBUTION ?? OFFICIAL_DISTRIBUTION;
+
+/** Render the stable semantic version plus an immutable fork build identity. */
+export function formatVersionOutput(
+	version: string,
+	source: DistributionSource = getDistribution(),
+	buildCommit: string | undefined = COMPILED_BUILD_COMMIT,
+): string {
+	if (!source.identity || !buildCommit) return `${APP_NAME}/${version}`;
+	return `${APP_NAME}/${version} (${source.identity}, ${buildCommit})`;
+}
 
 let distributionOverride: DistributionSource | undefined;
 

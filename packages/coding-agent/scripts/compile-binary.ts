@@ -4,6 +4,10 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
 
+/** Environment inputs used only by release/build scripts. */
+export const BUILD_VERSION_ENV = "OMP_BUILD_VERSION";
+export const BUILD_COMMIT_ENV = "OMP_BUILD_COMMIT";
+
 /** Inputs shared by local and release coding-agent binary builds. */
 export interface CodingAgentCompileOptions {
 	/** Absolute repository root used for package resolution. */
@@ -22,6 +26,10 @@ export interface CodingAgentCompileOptions {
 	readonly minifyIdentifiers?: boolean;
 	/** Disable Bun's built-in Darwin signing before the caller re-signs. */
 	readonly skipBuiltinCodesign?: boolean;
+	/** Semantic version to embed in a fork release binary. */
+	readonly buildVersion?: string;
+	/** Source commit to embed in a fork release binary. */
+	readonly buildCommit?: string;
 }
 
 /**
@@ -40,6 +48,8 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			external: [...COMPILED_EXTERNAL_DEPENDENCIES],
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
+				"process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion ?? ""),
+				"process.env.PI_BUILD_COMMIT": JSON.stringify(options.buildCommit ?? ""),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 			},

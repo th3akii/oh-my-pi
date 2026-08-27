@@ -36,6 +36,7 @@ const STABLE_TAG_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SEAM_TEST_FILE = "test/extensions-runner.test.ts";
 const SEAM_TEST_FILTER = "tool_approval_review";
 const UPDATER_TEST_FILE = "test/cli/update-cli.test.ts";
+const FOCUS_PACKAGE_DIR = "packages/coding-agent";
 const DEPS_TRIGGER_FILES: Record<string, true> = { "package.json": true, "bun.lock": true, "bun.lockb": true };
 const PRECONDITION_DELAYED_HINT = "resolve the state above (or run the shown recovery command), then retry";
 

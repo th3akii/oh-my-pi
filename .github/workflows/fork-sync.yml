@@ -1,0 +1,138 @@
+name: Fork upstream sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 0,8,16 * * *"
+
+concurrency:
+  group: fork-upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  FORK_REPOSITORY: th3akii/oh-my-pi
+  UPSTREAM_REPOSITORY: can1357/oh-my-pi
+  UPSTREAM_URL: https://github.com/can1357/oh-my-pi.git
+
+jobs:
+  sync:
+    name: Sync latest upstream stable release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out fork main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: th3akii/oh-my-pi
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      - uses: ./.github/actions/bun-install
+
+      - name: Configure official upstream remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+
+      - name: Detect latest upstream release
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_file="$RUNNER_TEMP/fork-sync-dry-run.log"
+          set +e
+          bun run fork:sync --dry-run 2>&1 | tee "$log_file"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "Phase 5 dry-run failed; leaving main untouched." >&2
+            exit "$status"
+          fi
+
+          if grep -Fq "already integrated" "$log_file"; then
+            echo "integrated=true" >> "$GITHUB_OUTPUT"
+            echo "Latest upstream stable release is already integrated; no branch or PR needed."
+            exit 0
+          fi
+
+          tag=$(sed -nE 's/^fork-sync: release: latest stable upstream release: (v[0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "$log_file" | tail -n 1)
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Could not resolve a stable upstream release from Phase 5 output." >&2
+            exit 1
+          fi
+          echo "integrated=false" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "branch=fork-sync/$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Reset deterministic sync branch
+        if: steps.detect.outputs.integrated != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin --prune
+          git checkout -B "${{ steps.detect.outputs.branch }}" origin/main
+
+      - name: Run Phase 5 sync and verification
+        if: steps.detect.outputs.integrated != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run fork:sync --branch "${{ steps.detect.outputs.branch }}"
+
+      - name: Push verified sync branch
+        if: steps.detect.outputs.integrated != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin "${{ steps.detect.outputs.branch }}:${{ steps.detect.outputs.branch }}"
+
+      - name: Open or update compatibility PR
+        if: steps.detect.outputs.integrated != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          branch="${{ steps.detect.outputs.branch }}"
+          tag="${{ steps.detect.outputs.tag }}"
+          owner="${FORK_REPOSITORY%%/*}"
+          title="chore(sync): integrate upstream $tag"
+          body_file="$RUNNER_TEMP/fork-sync-pr-body.md"
+          cat > "$body_file" <<EOF
+          ## Automated compatibility sync
+
+          Integrates stable upstream release [$tag](https://github.com/$UPSTREAM_REPOSITORY/releases/tag/$tag) into \\`$FORK_REPOSITORY\\`.
+
+          - Phase 5 \\`bun run fork:sync\\` completed successfully.
+          - Static checks, the tool approval review seam tests, and fork updater tests passed.
+          - This PR is intentionally not auto-merged; review and merge it into \\`main\\` manually.
+          EOF
+
+          pr_number=$(gh pr list \
+            --repo "$FORK_REPOSITORY" \
+            --state open \
+            --base main \
+            --head "$owner:$branch" \
+            --json number \
+            --jq '.[0].number // empty')
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --repo "$FORK_REPOSITORY" --title "$title" --body-file "$body_file"
+            echo "Updated PR #$pr_number for $tag."
+          else
+            gh pr create \
+              --repo "$FORK_REPOSITORY" \
+              --base main \
+              --head "$branch" \
+              --title "$title" \
+              --body-file "$body_file"
+          fi

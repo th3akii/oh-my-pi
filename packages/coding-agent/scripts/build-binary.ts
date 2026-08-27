@@ -2,7 +2,7 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { compileCodingAgent } from "./compile-binary";
+import { BUILD_COMMIT_ENV, BUILD_VERSION_ENV, compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
 const repoRoot = path.join(packageDir, "..", "..");
@@ -97,6 +97,8 @@ async function main(): Promise<void> {
 				target: crossBuild?.target,
 				executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 				skipBuiltinCodesign: shouldAdhocSign,
+				buildVersion: Bun.env[BUILD_VERSION_ENV],
+				buildCommit: Bun.env[BUILD_COMMIT_ENV],
 			});
 
 			if (shouldAdhocSign) {

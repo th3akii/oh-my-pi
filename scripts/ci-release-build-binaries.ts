@@ -3,7 +3,12 @@
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { COMPILED_EXTERNAL_DEPENDENCIES, compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
+import {
+	BUILD_COMMIT_ENV,
+	BUILD_VERSION_ENV,
+	COMPILED_EXTERNAL_DEPENDENCIES,
+	compileCodingAgent,
+} from "../packages/coding-agent/scripts/compile-binary";
 
 interface BinaryTarget {
 	id: string;
@@ -147,6 +152,8 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		target: target.target,
 		minifyIdentifiers: true,
 		skipBuiltinCodesign: shouldAdhocSignDarwinBinary(target),
+		buildVersion: Bun.env[BUILD_VERSION_ENV],
+		buildCommit: Bun.env[BUILD_COMMIT_ENV],
 	});
 	// Bun 1.3.12 emits a truncated Mach-O signature on darwin builds.
 	if (shouldAdhocSignDarwinBinary(target)) {
