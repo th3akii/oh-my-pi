@@ -135,7 +135,7 @@ jobs:
             throw "Canonical main version $env:UPSTREAM_VERSION is not an official upstream release: $tagProbe"
           }
           $upstreamRef = "refs/remotes/upstream/release-$tag"
-          git fetch --no-tags upstream "+refs/tags/$tag:$upstreamRef"
+          git fetch --no-tags upstream "+refs/tags/${tag}:${upstreamRef}"
           $fetchStatus = $LASTEXITCODE
           if ($fetchStatus -ne 0) {
             throw "Could not fetch official upstream tag $tag (exit code $fetchStatus)"
