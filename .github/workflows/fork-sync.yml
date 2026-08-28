@@ -10,7 +10,10 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # The merge carries upstream's .github/workflows/* changes; pushing refs
+  # that modify workflow files requires workflows: write on the token.
   contents: write
+  workflows: write
   pull-requests: write
 
 env:
@@ -24,6 +27,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      workflows: write
       pull-requests: write
     steps:
       - name: Check out fork main
