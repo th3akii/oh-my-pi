@@ -5,6 +5,9 @@
 ### Added
 
 - Fork Windows releases now embed `th3akii/oh-my-pi` and the source commit in `omp --version`, with automated upstream sync and safe bootstrap support.
+- Extensions can now subscribe to `tool_approval_review`, an advisory review emitted after final tool-input resolution but before the native approval selector; a unanimous `{ decision: "approve" }` skips the eligible mode-derived prompt, `{ decision: "deny" }` rejects through the native policy-denial path, and other outcomes keep the native prompt path unchanged.
+- `tool_approval_review` handlers now receive an immutable snapshot of the tool input; a mutation attempt escalates to the native approval prompt and can never alter what later handlers see or what executes.
+- Extensions can now read `pi.supportedEvents` to detect whether the running host dispatches a given event (e.g. `tool_approval_review`) before relying on it.
 
 ## [18.0.8] - 2026-08-27
 
