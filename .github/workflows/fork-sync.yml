@@ -10,10 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  # The merge carries upstream's .github/workflows/* changes; pushing refs
-  # that modify workflow files requires workflows: write on the token.
   contents: write
-  workflows: write
   pull-requests: write
 
 env:
@@ -27,9 +24,12 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-      workflows: write
       pull-requests: write
     steps:
+      # NOTE: `workflows` is not a grantable GITHUB_TOKEN scope, so pushes that
+      # carry upstream .github/workflows changes need a PAT with the `workflow`
+      # scope in the FORK_SYNC_TOKEN secret. Falls back to GITHUB_TOKEN (pushes
+      # touching workflow files will then be remote-rejected) when unset.
       - name: Check out fork main
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -38,7 +38,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: true
-
+          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
       - uses: ./.github/actions/bun-install
 
       - name: Configure official upstream remote
