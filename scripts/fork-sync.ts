@@ -185,6 +185,7 @@ function fail(cls: FailureClass, message: string): never {
 
 interface RunResult {
 	ok: boolean;
+	exitCode: number;
 	stdout: string;
 	stderr: string;
 }
@@ -194,6 +195,7 @@ function makeGit(cwd: string) {
 		const result = await $`git ${args}`.cwd(cwd).quiet().nothrow();
 		return {
 			ok: result.exitCode === 0,
+			exitCode: result.exitCode,
 			stdout: result.stdout.toString(),
 			stderr: result.stderr.toString(),
 		};
@@ -268,14 +270,21 @@ async function main(): Promise<number> {
 		);
 	}
 
-	log(
-		"upstream",
-		`fetching branches and tags from '${UPSTREAM_REMOTE}' (no pruning; fork-owned tags are never deleted)`,
-	);
-	const fetch = await git(["fetch", UPSTREAM_REMOTE, "--tags"]);
-	if (!fetch.ok) {
+	log("upstream", `fetching tags from '${UPSTREAM_REMOTE}' (no pruning; fork-owned tags are never deleted)`);
+	// Tags only: release selection (`ls-remote --tags`) and integration (`git merge <tag>`)
+	// consume nothing else, so fetching every upstream branch is dead weight — a CI run
+	// once died mid-pack-download under that load. One retry covers transient network/runner kills.
+	const FETCH_ATTEMPTS = 2;
+	let fetch: RunResult | undefined;
+	for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
+		fetch = await git(["fetch", "--no-tags", UPSTREAM_REMOTE, "refs/tags/*:refs/tags/*"]);
+		if (fetch.ok) break;
 		console.error(fetch.stderr);
-		fail("upstream", `git fetch ${UPSTREAM_REMOTE} failed`);
+		if (attempt < FETCH_ATTEMPTS)
+			log("upstream", `fetch attempt ${attempt} failed (exit ${fetch.exitCode}); retrying`);
+	}
+	if (fetch && !fetch.ok) {
+		fail("upstream", `git fetch ${UPSTREAM_REMOTE} failed (exit ${fetch.exitCode})`);
 	}
 
 	// ---- Stage: release resolution ---------------------------------------
