@@ -66,6 +66,7 @@ $expectedDigest = $Matches[1].ToLowerInvariant()
 $targetDirectory = Split-Path -Parent $target
 $token = [guid]::NewGuid().ToString("N")
 $temp = Join-Path $targetDirectory ".omp-fork-$token.download"
+$tempExe = Join-Path $targetDirectory ".omp-fork-$token.exe"
 $backup = Join-Path $targetDirectory ".omp-fork-$token.old"
 $tempCreated = $false
 $backupReady = $false
@@ -78,6 +79,9 @@ try {
     if ($actualDigest -ne $expectedDigest) {
         throw "Downloaded binary SHA-256 mismatch: expected $expectedDigest, received $actualDigest"
     }
+    # Windows refuses to execute files without an executable extension, so rename after hash verification.
+    Move-Item -LiteralPath $temp -Destination $tempExe
+    $temp = $tempExe
 
     $versionOutput = (& $temp --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch $VersionOutputPattern) {
