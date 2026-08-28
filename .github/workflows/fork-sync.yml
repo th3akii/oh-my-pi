@@ -79,15 +79,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "fork-sync-bot"
+          git config user.email "fork-sync-bot@users.noreply.github.com"
           git fetch origin --prune
           git checkout -B "${{ steps.detect.outputs.branch }}" origin/main
 
       - name: Run Phase 5 sync and verification
+        id: sync
         if: steps.detect.outputs.integrated != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          bun run fork:sync --branch "${{ steps.detect.outputs.branch }}"
+          status=0
+          bun run fork:sync --branch "${{ steps.detect.outputs.branch }}" || status=$?
+          # Exit 10 = conflicted merge committed with markers; push the branch and
+          # open a PR so the operator can resolve. Anything else is a hard failure.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 10 ]; then
+            exit "$status"
+          fi
+          if [ "$status" -eq 10 ]; then
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Push verified sync branch
         if: steps.detect.outputs.integrated != 'true'
@@ -117,6 +131,17 @@ jobs:
           - Static checks, the tool approval review seam tests, and fork updater tests passed.
           - This PR is intentionally not auto-merged; review and merge it into \\`main\\` manually.
           EOF
+          if [ "${{ steps.sync.outputs.conflicts }}" = "true" ]; then
+            cat >> "$body_file" <<EOF
+
+          ## ⚠ Conflicts committed for manual resolution
+
+          The merge of \\`$tag\\` hit conflicts. The merge commit on this branch contains
+          conflict markers — resolve them, then push to this branch. Verification
+          (static checks, seam tests, updater tests) was skipped for this state and
+          will run on the next automated sync.
+          EOF
+          fi
 
           pr_number=$(gh pr list \
             --repo "$FORK_REPOSITORY" \

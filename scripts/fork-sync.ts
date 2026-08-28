@@ -54,6 +54,7 @@ const EXIT_CODES = {
 	seam: 7,
 	updater: 8,
 	verify: 9,
+	conflicts: 10,
 } as const;
 type FailureClass = Exclude<keyof typeof EXIT_CODES, "ok">;
 
@@ -359,10 +360,31 @@ async function main(): Promise<number> {
 	if (!merge.ok) {
 		const conflicted = await git(["diff", "--name-only", "--diff-filter=U"]);
 		const files = conflicted.stdout.split("\n").filter(line => line.trim());
-		console.error("fork-sync: source integration FAILED with merge conflicts in:");
+		if (files.length === 0) {
+			// Not actually a conflict (e.g. missing committer identity on CI). Show
+			// git's stderr so the real cause is diagnosable instead of a false
+			// "conflicts" report.
+			console.error(merge.stderr);
+			fail("integration", `merge of ${tag} failed without conflicts`);
+		}
+		console.error("fork-sync: merge conflicts in:");
 		for (const file of files) console.error(`  ${file}`);
-		console.error("fork-sync: recovery: git merge --abort");
-		fail("integration", `merge of ${tag} reported conflicts`);
+		// The workflow surfaces this state as a PR; the operator resolves the
+		// markers there. Verification is meaningless on a marker-laden tree and
+		// is skipped.
+		log("integration", "committing the conflicted merge with markers for manual resolution");
+		const stage = await git(["add", "-A"]);
+		if (!stage.ok) {
+			console.error(stage.stderr);
+			fail("integration", "could not stage the conflicted merge state");
+		}
+		const commit = await git(["commit", "--no-edit"]);
+		if (!commit.ok) {
+			console.error(commit.stderr);
+			fail("integration", "could not commit the conflicted merge state");
+		}
+		console.error("fork-sync: merge committed WITH CONFLICT MARKERS — resolve them, then merge the PR.");
+		fail("conflicts", `merge of ${tag} has conflicts committed for manual resolution (verification skipped)`);
 	}
 	const mergeCommit = (await git(["rev-parse", "--short", "HEAD"])).stdout.trim();
 	log("integration", `merged ${tag} as ${mergeCommit}`);

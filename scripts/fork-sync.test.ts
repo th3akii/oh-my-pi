@@ -266,7 +266,7 @@ describe("fork-sync end to end (temp repositories)", () => {
 		}
 	}, 30000);
 
-	test("stops on merge conflict, reports the files, and leaves a recoverable merge state", async () => {
+	test("commits a conflicted merge with markers, reports the files, and skips verification", async () => {
 		const repos = await createTempRepos();
 		try {
 			await Bun.write(path.join(repos.fork, "app.txt"), "fork edit\n");
@@ -275,17 +275,22 @@ describe("fork-sync end to end (temp repositories)", () => {
 			await advanceUpstream(repos.upstream, "upstream edit\n", "v1.2.0");
 
 			const result = await runSync(["--repo", repos.fork, "--upstream-url", repos.upstream, ...SYNC_FLAGS]);
-			expect(result.exitCode).toBe(4);
-			expect(result.output).toContain("integration");
+			expect(result.exitCode).toBe(10); // conflicts class: PR is still opened by CI
+			expect(result.output).toContain("CONFLICT MARKERS");
 			expect(result.output).toContain("app.txt");
-			expect(result.output).toContain("git merge --abort");
 
 			const status = await $`git status --porcelain`.cwd(repos.fork).text();
-			expect(status).toContain("UU app.txt"); // normal unresolved merge state
-
-			await gitIn(repos.fork, ["merge", "--abort"]);
-			const clean = await $`git status --porcelain`.cwd(repos.fork).text();
-			expect(clean.trim()).toBe(""); // documented abort command restores the tree
+			expect(status.trim()).toBe(""); // merge state committed, nothing dangling
+			const subject = await $`git log -1 --format=%s`.cwd(repos.fork).text();
+			expect(subject).toContain("Merge official release v1.2.0"); // merge commit exists
+			const app = await Bun.file(path.join(repos.fork, "app.txt")).text();
+			expect(app).toContain("<<<<<<<"); // markers await manual resolution
+			expect(app).toContain("fork edit");
+			expect(app).toContain("upstream edit");
+			const ancestry = await $`git merge-base --is-ancestor refs/remotes/upstream-tag/v1.2.0 HEAD`
+				.cwd(repos.fork)
+				.nothrow();
+			expect(ancestry.exitCode).toBe(0); // upstream release reachable once markers resolved
 		} finally {
 			await repos.cleanup();
 		}
