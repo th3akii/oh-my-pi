@@ -84,6 +84,20 @@ jobs:
           git fetch origin --prune
           git checkout -B "${{ steps.detect.outputs.branch }}" origin/main
 
+
+      - name: Install prebuilt Linux native addons
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same policy as ci.yml's PR path: tests load the latest release
+          # addons from the npm leaf; the workspace loader skips its version
+          # sentinel for workspace loads.
+          tarball="$(npm view @oh-my-pi/pi-natives-linux-x64@latest dist.tarball)"
+          echo "Fetching $tarball"
+          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP"
+          mkdir -p packages/natives/native
+          cp "$RUNNER_TEMP/package/pi_natives.linux-x64-baseline.node" packages/natives/native/
+          cp "$RUNNER_TEMP/package/pi_natives.linux-x64-modern.node" packages/natives/native/
       - name: Run Phase 5 sync and verification
         id: sync
         if: steps.detect.outputs.integrated != 'true'
