@@ -171,8 +171,10 @@ describe("fork-sync end to end (temp repositories)", () => {
 
 			const feature = await Bun.file(path.join(repos.fork, "fork-feature.txt")).text();
 			expect(feature).toBe("fork only\n"); // fork commit preserved across merge
-			const ancestry = await $`git merge-base --is-ancestor v1.1.0 HEAD`.cwd(repos.fork).nothrow();
-			expect(ancestry.exitCode).toBe(0); // release tag is now in fork ancestry
+			const ancestry = await $`git merge-base --is-ancestor refs/remotes/upstream-tag/v1.1.0 HEAD`
+				.cwd(repos.fork)
+				.nothrow();
+			expect(ancestry.exitCode).toBe(0); // upstream release commit is now in fork ancestry
 			const message = await $`git log -1 --format=%s`.cwd(repos.fork).text();
 			expect(message).toContain("Merge official release v1.1.0");
 
@@ -198,6 +200,29 @@ describe("fork-sync end to end (temp repositories)", () => {
 			const tags = await $`git tag --list`.cwd(repos.fork).text();
 			expect(tags).toContain("v9.9.9"); // fork-owned tags never pruned/deleted
 			expect(tags).toContain("v0.1.0-fork");
+		} finally {
+			await repos.cleanup();
+		}
+	}, 30000);
+
+	test("a same-named fork tag diverging from upstream never blocks sync and is never clobbered", async () => {
+		const repos = await createTempRepos();
+		try {
+			await advanceUpstream(repos.upstream, "upstream v1.1.0\n", "v1.1.0");
+			// Fork publishes its own release under the same tag name, pointing at the
+			// fork commit — a different commit than upstream's v1.1.0.
+			await gitIn(repos.fork, ["tag", "v1.1.0"]);
+			const forkTagBefore = await $`git rev-parse v1.1.0`.cwd(repos.fork).text();
+
+			const result = await runSync(["--repo", repos.fork, "--upstream-url", repos.upstream, ...SYNC_FLAGS]);
+			expect(result.exitCode).toBe(0);
+			expect(result.output).toContain("merged v1.1.0"); // upstream release integrated, not skipped/refused
+
+			const ancestry = await $`git merge-base --is-ancestor refs/remotes/upstream-tag/v1.1.0 HEAD`
+				.cwd(repos.fork)
+				.nothrow();
+			expect(ancestry.exitCode).toBe(0); // merged the upstream commit, not the fork tag's
+			expect(await $`git rev-parse v1.1.0`.cwd(repos.fork).text()).toBe(forkTagBefore); // fork tag untouched
 		} finally {
 			await repos.cleanup();
 		}

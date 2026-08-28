@@ -7,11 +7,14 @@
 //   → static checks (6) → approval-review seam tests (7) → updater tests (8);
 //   unexpected verification errors exit 9. Success and already-up-to-date exit 0.
 //
-// Integration strategy: a normal `git merge` of the official release tag. The
-// fork branch is upstream main plus fork commits, so a tag merge preserves fork
-// commits, keeps release ancestry (`git merge-base --is-ancestor v`), never
-// rewrites history, and is repeatable. Conflicts stop the run with the exact
-// abort command; nothing is auto-resolved, stashed, or rolled back.
+// Integration strategy: a normal `git merge` of the official release commit,
+// fetched into the `refs/remotes/upstream-tag/*` namespace. Upstream tags never
+// enter `refs/tags/*` — the fork publishes its own releases under the same
+// vX.Y.Z tag names, and those must never be clobbered. The merge preserves
+// fork commits, keeps release ancestry (`git merge-base --is-ancestor
+// refs/remotes/upstream-tag/vX.Y.Z`), never rewrites history, and is
+// repeatable. Conflicts stop the run with the exact abort command; nothing is
+// auto-resolved, stashed, or rolled back.
 //
 // Which upstream release is integrated: the highest stable tag (`vX.Y.Z`)
 // listed by `git ls-remote --tags upstream` — provably sourced from the
@@ -30,6 +33,7 @@ import * as path from "node:path";
 import { $ } from "bun";
 
 const UPSTREAM_REMOTE = "upstream";
+const UPSTREAM_TAG_REF_PREFIX = "refs/remotes/upstream-tag/";
 const OFFICIAL_REPO_URL = "https://github.com/can1357/oh-my-pi.git";
 const OFFICIAL_REPO_SLUG = "can1357/oh-my-pi";
 const STABLE_TAG_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -270,14 +274,17 @@ async function main(): Promise<number> {
 		);
 	}
 
-	log("upstream", `fetching tags from '${UPSTREAM_REMOTE}' (no pruning; fork-owned tags are never deleted)`);
-	// Tags only: release selection (`ls-remote --tags`) and integration (`git merge <tag>`)
-	// consume nothing else, so fetching every upstream branch is dead weight — a CI run
-	// once died mid-pack-download under that load. One retry covers transient network/runner kills.
+	log("upstream", `fetching upstream tags into ${UPSTREAM_TAG_REF_PREFIX}* (local tags are never touched)`);
+	// Tags only, into a dedicated namespace: the fork publishes its own releases under the
+	// same vX.Y.Z tag names, so refs/tags/* must never be written — a same-named fork tag
+	// diverging from upstream's is legitimate, not a clobber conflict. Release selection
+	// (`ls-remote --tags`) and integration (`git merge <namespaced ref>`) need nothing else,
+	// so fetching every upstream branch is dead weight (a CI run once died mid-pack-download
+	// under that load). One retry covers transient network/runner kills.
 	const FETCH_ATTEMPTS = 2;
 	let fetch: RunResult | undefined;
 	for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
-		fetch = await git(["fetch", "--no-tags", UPSTREAM_REMOTE, "refs/tags/*:refs/tags/*"]);
+		fetch = await git(["fetch", "--no-tags", UPSTREAM_REMOTE, `+refs/tags/*:${UPSTREAM_TAG_REF_PREFIX}*`]);
 		if (fetch.ok) break;
 		console.error(fetch.stderr);
 		if (attempt < FETCH_ATTEMPTS)
@@ -313,19 +320,21 @@ async function main(): Promise<number> {
 		tag = selected;
 	}
 
-	// A fork-owned local tag with the same name must not shadow the official
-	// release commit; refuse instead of merging the wrong code.
-	const localResolve = await git(["rev-parse", "-q", "--verify", `${tag}^{commit}`]);
+	// Same-named fork tags are expected (fork releases), so the merge target is the
+	// namespaced upstream ref, never a local tag. Verify it matches what upstream
+	// actually advertises so a stale/failed fetch can't merge the wrong commit.
 	const upstreamCommit = upstreamTags.get(tag);
-	if (localResolve.ok && localResolve.stdout.trim() !== upstreamCommit) {
+	const fetchedRef = `${UPSTREAM_TAG_REF_PREFIX}${tag}`;
+	const fetchedCommit = await git(["rev-parse", "-q", "--verify", fetchedRef]);
+	if (!fetchedCommit.ok || fetchedCommit.stdout.trim() !== upstreamCommit) {
 		fail(
 			"upstream",
-			`local tag ${tag} points at ${localResolve.stdout.trim()} but upstream '${UPSTREAM_REMOTE}' has ${upstreamCommit}; refusing to merge the wrong commit (repoint or delete the local tag manually)`,
+			`${fetchedRef} ${fetchedCommit.ok ? `points at ${fetchedCommit.stdout.trim()}` : "is missing"} but upstream '${UPSTREAM_REMOTE}' advertises ${upstreamCommit}; refusing to merge an unverified commit`,
 		);
 	}
 	log("release", `latest stable upstream release: ${tag}`);
 
-	const isAncestor = await git(["merge-base", "--is-ancestor", tag, branch]);
+	const isAncestor = await git(["merge-base", "--is-ancestor", fetchedRef, branch]);
 	if (isAncestor.ok) {
 		log("result", `${tag} is already integrated into ${branch}; nothing to do`);
 		console.log("fork-sync: result: ok (already integrated)");
@@ -339,8 +348,14 @@ async function main(): Promise<number> {
 	}
 
 	// ---- Stage: integration ----------------------------------------------
-	log("integration", `merging ${tag} into ${branch}`);
-	const merge = await git(["merge", "--no-edit", "-m", `Merge official release ${tag} (${OFFICIAL_REPO_SLUG})`, tag]);
+	log("integration", `merging ${tag} (${fetchedRef}) into ${branch}`);
+	const merge = await git([
+		"merge",
+		"--no-edit",
+		"-m",
+		`Merge official release ${tag} (${OFFICIAL_REPO_SLUG})`,
+		fetchedRef,
+	]);
 	if (!merge.ok) {
 		const conflicted = await git(["diff", "--name-only", "--diff-filter=U"]);
 		const files = conflicted.stdout.split("\n").filter(line => line.trim());
