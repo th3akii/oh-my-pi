@@ -8,6 +8,39 @@
 - Extensions can now subscribe to `tool_approval_review`, an advisory review emitted after final tool-input resolution but before the native approval selector; a unanimous `{ decision: "approve" }` skips the eligible mode-derived prompt, `{ decision: "deny" }` rejects through the native policy-denial path, and other outcomes keep the native prompt path unchanged.
 - `tool_approval_review` handlers now receive an immutable snapshot of the tool input; a mutation attempt escalates to the native approval prompt and can never alter what later handlers see or what executes.
 - Extensions can now read `pi.supportedEvents` to detect whether the running host dispatches a given event (e.g. `tool_approval_review`) before relying on it.
+## [18.0.11] - 2026-08-29
+
+### Added
+
+- Added gallery previews for composer and status-line components, with CLI filters for browsing by surface, composer, or segment.
+
+### Changed
+
+- The status line now displays the thinking level as a compact icon alongside the model name by default; set `statusLine.compactThinkingLevel` to `false` to restore the previous display.
+
+### Fixed
+
+- Fixed MCP OAuth discovery for shared API gateways and authorization servers with nested paths, including Keycloak realms, so authentication targets the correct resource issuer and supports endpoint and dynamic client-registration discovery.
+- Fixed credential rotation for HTTP 402 payment-required responses so sibling credentials are tried before model fallback without misclassifying informative non-quota errors.
+- Transport errors after a complete, non-executed tool call can now retry through configured retry budgets and fallback chains when it is safe to do so, instead of ending the turn prematurely.
+- Improved handling of truncated or otherwise undecodable images so they produce an actionable error and no longer permanently block subsequent requests or resumed sessions.
+- Fixed Sharpshooter consolidation preserving memory files and queued changes when an empty replacement is returned.
+- Fixed `omp plugin features` so it discovers marketplace-installed plugins.
+- Fixed Escape handling when closing the `/session` information panel; the panel now retains focus until dismissed.
+- Fixed the thinking-block visibility toggle so streamed reasoning is correctly hidden when thinking blocks are set to hidden.
+- Reduced high idle CPU usage while the agent is working.
+- Fixed resumed advisor subscription usage being displayed as a dollar amount instead of as a subscription.
+- Fixed relative API addresses whose names end in image extensions being pasted as text instead of incorrectly treated as missing local image files.
+- Fixed chat Markdown links and bare URLs so they become clickable OSC 8 hyperlinks when `tui.hyperlinks=always` is enabled.
+- Fixed unreadable composer text on light terminal backgrounds when using transparent composer styles.
+- Fixed `retry.fallbackChains` warnings for valid selectors from providers whose model discovery is still pending; validation now updates after discovery completes.
+- Fixed visible browser windows launched by OMP so page content resizes with the operating-system window.
+- Fixed Python evaluation hanging on Windows when importing native-extension modules such as NumPy.
+- Fixed subagent extension context helpers so `ctx.getContextUsage()` and `ctx.compact()` operate on the child session.
+- Fixed `lsp diagnostics` incorrectly reporting success for project-aware pull-diagnostic servers when diagnostics time out or fail.
+- Corrected labels under `Settings > Context > Compaction Token Limit`.
+- Fixed orphaned pages, iframes, and workers accumulating in the shared headless browser after abnormal OMP session termination.
+
 ## [18.0.10] - 2026-08-28
 
 ### Added
