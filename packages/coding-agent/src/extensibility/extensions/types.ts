@@ -931,23 +931,21 @@ export interface ToolApprovalResolvedEvent {
  * Fired after final tool-input resolution for an eligible mode-derived prompt,
  * before the native approval selector. The review may approve the call
  * (skipping the ordinary prompt), escalate back to it, or deny the call. It
- * cannot rewrite the input. `input` is an immutable snapshot, identical to the
- * input that will reach execution; mutation attempts throw and escalate to the
- * native approval path.
+ * cannot rewrite the deeply immutable snapshot of the input under review.
  */
 export interface ToolApprovalReviewEvent {
-	type: "tool_approval_review";
-	sessionId: string;
-	toolCallId: string;
-	toolName: string;
-	input: Record<string, unknown>;
-	approvalMode: ApprovalMode;
-	tier: ToolTier;
+	readonly type: "tool_approval_review";
+	readonly sessionId: string;
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly input: Readonly<Record<string, unknown>>;
+	readonly approvalMode: ApprovalMode;
+	readonly tier: ToolTier;
 }
 
 export type ToolApprovalReviewResult =
-	| { decision: "approve"; rationale?: string }
-	| { decision: "escalate"; reason?: string }
+	| { decision: "approve" }
+	| { decision: "escalate" }
 	| { decision: "deny"; reason?: string };
 
 interface ToolCallEventBase {
@@ -1231,11 +1229,13 @@ export type ExtensionServiceTier<Family extends ServiceTierFamily> = Family exte
 		: ServiceTier;
 
 /**
- * Event names the host dispatches to extension handlers. Plugins use this to
- * detect whether the running host supports a given seam (e.g.
- * `tool_approval_review`) — registering a handler for an event an older host
- * does not dispatch is a silent no-op. Keep in sync with the `on` overloads
- * below.
+ * Event names dispatched by the host to extension handlers.
+ *
+ * Exposed through `supportedEvents` for runtime capability detection.
+ * Extensions should treat `supportedEvents` as optional so they remain
+ * compatible with older hosts that predate capability reporting.
+ *
+ * Keep in sync with the `on()` overloads below.
  */
 export const EXTENSION_EVENT_NAMES: readonly string[] = Object.freeze([
 	"resources_discover",
@@ -1309,8 +1309,8 @@ export interface ExtensionAPI {
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof PiCodingAgent;
 
-	/** Event names the host dispatches to extension handlers; plugins use it to detect seam support on older hosts. */
-	supportedEvents: readonly string[];
+	/** Event names dispatched by this host. Absent on older hosts. */
+	supportedEvents?: readonly string[];
 
 	// =========================================================================
 	// Event Subscription
