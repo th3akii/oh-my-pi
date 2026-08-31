@@ -171,6 +171,8 @@ long as that extension registration is active. `pi.unregisterProvider(name)` (an
 extension source cleanup) removes only that runtime override, restoring the built-in
 or configured usage resolver.
 
+Extension-registered providers (`registerProvider`) can supply `fetchDynamicModels` for runtime model discovery; these fetches are hard-bounded to a 15-second timeout (`RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS` in `model-provider-discovery.ts`) so a hung endpoint cannot stall discovery.
+
 In interactive mode, `input` handlers run before the built-in first-message auto-title check. Extensions that call `await pi.setSessionName(...)` from `input` can set the persisted session name and prevent the default auto-generated title from running for that session.
 
 Also exposed:
@@ -191,6 +193,8 @@ Also exposed:
 - `triggerTurn: true` — starts a turn when idle (also honored with `deliverAs: "nextTurn"`: idle prompts immediately; while streaming the queued message schedules an internal continuation)
 
 `pi.sendUserMessage(content, { deliverAs })` always goes through prompt flow. Omit `deliverAs` to start a normal prompt when idle; while streaming, omitted `deliverAs` queues the message as a steer. Set `deliverAs: "followUp"` to wait until the current run finishes.
+
+Payloads passed to `pi.sendMessage` are normalized before delivery (`normalizeCustomMessagePayload` in `session/messages.ts`): non-object payloads are coerced to string content under the default custom type, missing `customType`/`attribution` fields are defaulted, and invalid content collapses to an empty string — malformed payloads no longer persist entries that crash later session resumes.
 
 ## 2) Handler context (`ExtensionContext`)
 
@@ -293,7 +297,7 @@ Cancelable pre-events:
 - `after_provider_response`
 - `context`
 - `agent_start` / `agent_end` — agent loop lifecycle notification; `agent_end` remains notification-only
-- `session_stop` — main-session stop hook, awaited before settle; may continue with `{ continue: true, additionalContext }` or `{ decision: "block", reason }`; capped at 8 consecutive continuations and never fires for task/subagent sessions
+- `session_stop` — main-session stop hook, awaited before settle; may continue with `{ continue: true, additionalContext }` or `{ decision: "block", reason }`; capped at 8 consecutive continuations, never fires for task/subagent sessions, and defers until agent-owned background jobs are fully idle (`#hasPendingAsyncWake` in `session/agent-session.ts`)
 - `turn_start` / `turn_end`
 - `message_start` / `message_update` / `message_end` — lifecycle notifications; `message_end` receives a detached message snapshot, so use `tool_result` or `context` when an extension needs to change provider context
 
@@ -305,6 +309,44 @@ Cancelable pre-events:
 - `tool_approval_requested` / `tool_approval_resolved` (observability; emitted by `wrapper.ts` only when a tool requires approval and an approval handler is registered)
 
 `tool_result` is middleware-style: handlers run in extension order and each sees prior modifications.
+
+#### Approval review
+
+`tool_approval_review` lets permission and guard extensions resolve an otherwise eligible native approval prompt without replacing OMP's policy engine.
+
+The decision vocabularies are separate:
+
+- native policy: `allow | prompt | deny`;
+- extension review: `approve | deny | escalate`.
+
+The host emits the review only for a mode-derived native prompt. Native tool or user denies, explicit user prompts, tool-specific prompt overrides, provider computer-safety checks, native allows, and xdev-approved calls remain authoritative and do not emit it.
+
+- `approve` resolves the eligible prompt positively and suppresses the native selector;
+- `deny` vetoes the call at the extension-review layer, preserves its optional `reason`, and does not show the native selector;
+- `escalate` makes no decision and continues through the ordinary native selector;
+- input that is not a plain object/array tree (for example nested `Map`, `Set`, or `Date` values) cannot be snapshotted immutably, so review escalates without dispatching handlers;
+
+Handlers receive a deeply immutable snapshot of the final owned tool input — the value that remains after host and `tool_call` transformations and that native policy, prompt formatting, and execution all use. Review results cannot rewrite the invocation, and the owned value itself is not frozen: tools may still mutate their validated parameters internally.
+
+Approval requires unanimous valid approval from at least one handler. A valid `deny` takes precedence across handlers. Otherwise, no handlers, any `escalate`, disagreement, malformed result, thrown error, timeout, or cancellation produces `escalate`. Cancellation before execution is committed prevents execution even if a handler returned `approve`.
+
+Use runtime capability detection because an older host may accept registration of an unknown event that never fires:
+
+```ts
+const supportsApprovalReview =
+  pi.supportedEvents?.includes("tool_approval_review") ?? false;
+
+if (supportsApprovalReview) {
+  pi.on("tool_approval_review", async (event) => {
+    if (event.toolName === "bash" && event.input.command === "approved-command") {
+      return { decision: "approve" };
+    }
+    return { decision: "escalate" };
+  });
+}
+```
+
+`supportedEvents` is optional for compatibility with older hosts. Current hosts expose a frozen readonly list; extensions must not mutate it.
 
 ### Reliability/runtime signals
 
@@ -566,7 +608,7 @@ Current no-op methods in this controller:
 - `setFooter`
 - `setHeader`
 
-`setEditorComponent` is wired to the live editor (`ctx.setEditorComponent(factory)`). `setWidget` renders real widget components above or below the editor via `setHookWidget(...)` (`placement: "aboveEditor" | "belowEditor"`; string-array content capped at 10 lines).
+`setEditorComponent` is wired to the live editor (`ctx.setEditorComponent(factory)`). `setWidget` renders real widget components above or below the editor via `setHookWidget(...)` (`placement: "aboveEditor" | "belowEditor"`; string-array content capped at 10 lines). `setEditorText` and `pasteToEditor` schedule a repaint after mutating the editor, so prompt changes don't leave stale content on screen.
 
 ### RPC mode (`rpc-mode.ts`)
 

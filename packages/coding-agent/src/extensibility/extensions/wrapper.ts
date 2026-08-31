@@ -24,7 +24,7 @@ import { withFileMutationSession } from "../../tools/file-write-fallback";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
-import type { RegisteredTool, ToolCallEventResult } from "./types";
+import type { RegisteredTool, ToolApprovalReviewResult, ToolCallEventResult } from "./types";
 
 /**
  * Adapts a RegisteredTool into an AgentTool.
@@ -143,6 +143,9 @@ function safetyCheckLines(checks: readonly ComputerSafetyCheck[]): string[] {
 		return `${index + 1}. ${approvalData(value)}`;
 	});
 }
+function extensionReviewDenyError(toolName: string, reason?: string): Error {
+	return new Error(`Tool "${toolName}" was denied by an extension approval review${reason ? `: ${reason}` : ""}`);
+}
 
 /**
  * Wraps a tool with extension callbacks for interception.
@@ -205,7 +208,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// 1. Emit tool_call event first - extensions can block execution or revise the input the tool
 		// runs with. Doing this BEFORE the approval gate means approval (below) resolves against the
 		// input that actually executes, closing the "approve one thing, run another" gap: the prompt
-		// text, policy resolution, and provider safety checks all see `effectiveParams`.
+		// text, policy resolution, and provider safety checks all see the final owned input.
 		let effectiveParams = params;
 		if (!loopEmittedToolCall && this.runner.hasHandlers("tool_call")) {
 			try {
@@ -226,10 +229,10 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					const reason = callResult.reason || "Tool execution was blocked by an extension";
 					throw new Error(reason);
 				}
-				// A non-blocking handler may replace the execution input. The returned object is the raw
-				// input passed to `execute` (handler-owned; not re-normalized). Skipped for `computer`
-				// tool calls, whose event input is a synthetic {actions,pendingSafetyChecks} view
-				// (see toolEventArgs) rather than the real execution params.
+				// A non-blocking handler may replace the execution input. The returned object is copied
+				// into the final owned input below. Skipped for `computer` tool calls, whose event input
+				// is a synthetic {actions,pendingSafetyChecks} view (see toolEventArgs) rather than the
+				// real execution params.
 				if (callResult?.input !== undefined && context?.toolCall?.providerMetadata?.type !== "computer") {
 					effectiveParams = callResult.input as typeof params;
 				}
@@ -240,12 +243,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
 			}
 		}
+		const inputMatchesDispatch = effectiveParams === params;
 
-		// 2. Full approval gate against the (possibly revised) input that will actually run — resolves
-		// policy and prompts on `effectiveParams`, so the user approves exactly what executes. A revised
+		const finalParams = structuredClone(effectiveParams);
+
+		// 2. Full approval gate against the owned final input that will actually run — resolves
+		// policy and prompts on `finalParams`, so the user approves exactly what executes. A revised
 		// input that newly resolves to `deny` is caught here even though the original passed the
 		// short-circuit above.
-		const resolvedArgs = approvalArgs(effectiveParams, context);
+		const resolvedArgs = approvalArgs(finalParams, context);
 		const resolved = resolveApproval(this.tool, resolvedArgs, approvalMode, userPolicies);
 		context?.xdevTierResolved?.(resolved.tier);
 		if (resolved.policy === "deny") {
@@ -260,17 +266,21 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// and tool-demanded overrides still prompt. Provider safety checks are
 		// stronger: yolo, per-tool allow, and xdev approval never acknowledge
 		// them on the user's behalf.
-		const explicitPrompt = resolved.override || Object.hasOwn(userPolicies, resolved.policyKey ?? this.tool.name);
-		const xdevBypass = context?.xdevApproved === true && effectiveParams === params;
+		const explicitPrompt = resolved.override || resolved.source === "user";
+		const xdevBypass = context?.xdevApproved === true && inputMatchesDispatch;
 		const approvalCheck = {
 			required: pendingSafetyChecks.length > 0 || (resolved.policy === "prompt" && (explicitPrompt || !xdevBypass)),
 			reason: resolved.reason,
 		};
 
-		// Advisory extension review, exactly between final input resolution and
-		// the native selector. Eligible only for mode-derived prompts: approve
-		// suppresses the ordinary prompt, escalate keeps it unchanged, and deny
-		// rejects through the native policy-denial path without UI or execution.
+		// Extension approval review between final input resolution and the native
+		// selector. Eligible only for mode-derived prompts: approve resolves the
+		// prompt positively, deny vetoes the call at the extension layer, and
+		// escalate leaves the decision to the ordinary native selector. Handlers
+		// review a deeply immutable snapshot of the owned params: freezing the
+		// owned params themselves would forbid tools from mutating their
+		// validated input internally. Clone or freeze failures fail closed to the
+		// native selector.
 		if (
 			approvalCheck.required &&
 			resolved.policy === "prompt" &&
@@ -280,28 +290,31 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			!xdevBypass &&
 			!signal?.aborted
 		) {
-			const review = await this.runner.emitToolApprovalReview(
-				{
-					type: "tool_approval_review",
-					sessionId: context?.sessionManager?.getSessionId() ?? "",
-					toolCallId,
-					toolName: this.tool.name,
-					input: effectiveParams as Record<string, unknown>,
-					approvalMode,
-					tier: resolved.tier,
-				},
-				signal,
-			);
-			if (review.decision === "deny") {
-				throw denyError(
+			let review: ToolApprovalReviewResult;
+			try {
+				review = await this.runner.emitToolApprovalReview(
 					{
-						...resolved,
-						policy: "deny",
-						source: "tool",
-						...(review.reason ? { reason: review.reason } : {}),
+						type: "tool_approval_review",
+						sessionId: context?.sessionManager?.getSessionId() ?? "",
+						toolCallId,
+						toolName: this.tool.name,
+						input: structuredClone(finalParams) as Record<string, unknown>,
+						approvalMode,
+						tier: resolved.tier,
 					},
-					this.tool.name,
+					signal,
 				);
+			} catch (err) {
+				// emitToolApprovalReview resolves to escalate on handler/freeze
+				// failures; a throw here can only be a snapshot-clone failure or an
+				// abort. Either way the native selector must decide; abort is
+				// re-raised by throwIfAborted below.
+				review = { decision: "escalate" };
+				if (!(err instanceof TypeError)) throw err;
+			}
+			signal?.throwIfAborted();
+			if (review.decision === "deny") {
+				throw extensionReviewDenyError(this.tool.name, review.reason);
 			}
 			if (review.decision === "approve") {
 				// Suppress only this eligible mode-derived native prompt.
@@ -399,7 +412,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// registry with this class whenever a runner exists). Inert with no
 			// fallback registered: no scope is entered.
 			result = await withFileMutationSession(this.runner.sessionId, () =>
-				this.tool.execute(toolCallId, effectiveParams, signal, onUpdate, context),
+				this.tool.execute(toolCallId, finalParams, signal, onUpdate, context),
 			);
 		} catch (err) {
 			executionError = err instanceof Error ? err : new Error(String(err));
@@ -417,7 +430,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				toolCallId,
 				input: normalizeToolEventInput(
 					this.tool.name,
-					resolveToolEventInput(this.tool, toolEventArgs(effectiveParams, context)),
+					resolveToolEventInput(this.tool, toolEventArgs(finalParams, context)),
 				),
 				content: result.content,
 				details: result.details,

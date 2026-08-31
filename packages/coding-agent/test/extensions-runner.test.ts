@@ -7,7 +7,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "@oh-my-pi/omptype/typebox";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
+import type { AgentContext, AgentLoopConfig } from "@oh-my-pi/pi-agent-core/types";
+import type { ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -159,6 +162,51 @@ describe("ExtensionRunner", () => {
 
 		runner.initialize(actions, contextActions, undefined, undefined, "tui");
 		expect(runner.createContext().mode).toBe("tui");
+	});
+
+	it("uses required context actions when command actions are unavailable", async () => {
+		const result = await loadTestExtensions();
+		const runner = new ExtensionRunner(
+			result.extensions,
+			result.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		const usage = { tokens: 1200, contextWindow: 8000, percent: 15 };
+		const compact = vi.fn(async () => {});
+
+		runner.initialize(
+			{
+				sendMessage: () => {},
+				sendUserMessage: () => {},
+				appendEntry: () => {},
+				setLabel: () => {},
+				getActiveTools: () => [],
+				getAllTools: () => [],
+				setActiveTools: async () => {},
+				getCommands: () => [],
+				setModel: async () => false,
+				getThinkingLevel: () => undefined,
+				setThinkingLevel: () => {},
+				getSessionName: () => undefined,
+				setSessionName: async () => {},
+			},
+			{
+				getModel: () => undefined,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => usage,
+				compact,
+				getSystemPrompt: () => [],
+			},
+		);
+
+		expect(runner.createContext().getContextUsage()).toEqual(usage);
+		await runner.createContext().compact("preserve current task");
+		expect(compact).toHaveBeenCalledWith("preserve current task");
 	});
 
 	describe("shortcut conflicts", () => {
@@ -2585,6 +2633,10 @@ describe("ExtensionRunner", () => {
 				delete globalWithReview.__reviewController;
 				delete globalWithReview.__reviewEntered;
 			};
+			afterEach(() => {
+				clearTrace();
+				vi.restoreAllMocks();
+			});
 
 			const firstReviewText = (result: { content: readonly (TextContent | ImageContent)[] }): string | undefined => {
 				const block = result.content[0];
@@ -2640,7 +2692,7 @@ describe("ExtensionRunner", () => {
 					extraContext?: Record<string, unknown>;
 				},
 			) =>
-				(new ExtensionToolWrapper(tool, runner) as ExtensionToolWrapper<any>).execute(
+				new ExtensionToolWrapper(tool, runner).execute(
 					toolCallId,
 					(options?.params ?? {}) as never,
 					options?.signal,
@@ -2662,7 +2714,7 @@ describe("ExtensionRunner", () => {
 				code: string,
 				customSelect?: (title: string, options: string[]) => Promise<string | undefined>,
 			) => {
-				fs.writeFileSync(path.join(extensionsDir, fileName), code);
+				await Bun.write(path.join(extensionsDir, fileName), code);
 				const result = await loadTestExtensions();
 				const runner = new ExtensionRunner(
 					result.extensions,
@@ -2686,12 +2738,16 @@ describe("ExtensionRunner", () => {
 
 			const dispatchRunner = (
 				reviewHandlers: Array<(event: ToolApprovalReviewEvent, ctx: unknown) => unknown>,
+				toolCallHandlers: Array<(event: unknown, ctx: unknown) => unknown> = [],
 			): ExtensionRunner => {
 				const extensionPath = path.join(extensionsDir, "review-dispatch.ts");
 				const extension: Extension = {
 					path: extensionPath,
 					resolvedPath: extensionPath,
-					handlers: new Map([["tool_approval_review", reviewHandlers as never]]),
+					handlers: new Map([
+						["tool_approval_review", reviewHandlers as never],
+						["tool_call", toolCallHandlers as never],
+					]),
 					tools: new Map(),
 					assistantThinkingRenderers: [],
 					fileWriteFallbackHandlers: [],
@@ -2766,7 +2822,7 @@ describe("ExtensionRunner", () => {
 					},
 					async () => {
 						seen.push("escalate");
-						return { decision: "escalate", reason: "second opinion" };
+						return { decision: "escalate" };
 					},
 					async () => {
 						seen.push("deny");
@@ -2777,19 +2833,37 @@ describe("ExtensionRunner", () => {
 				expect(seen).toEqual(["approve", "escalate", "deny"]);
 			});
 
-			it("dispatch returns escalation for malformed handler results", async () => {
+			it("dispatch returns escalation for malformed or adversarial handler results", async () => {
+				const inheritedDecision = Object.create({ decision: "approve" });
+				const throwingDecision = Object.defineProperty({}, "decision", {
+					get: () => {
+						throw new Error("getter exploded");
+					},
+					enumerable: true,
+				});
+				const throwingProxy = new Proxy(
+					{ decision: "approve" },
+					{
+						ownKeys: () => {
+							throw new Error("proxy exploded");
+						},
+					},
+				);
 				const malformed = [
 					undefined,
 					"approve",
 					{},
+					inheritedDecision,
+					throwingDecision,
+					throwingProxy,
 					{ decision: "deny", extra: true },
 					{ decision: "deny", reason: 123 },
-					{ decision: "approve", rationale: 123 },
+					{ decision: "approve", rationale: "unused" },
 					{ decision: "approve", input: { command: "rewritten" } },
 				];
 				for (const result of malformed) {
 					const runner = dispatchRunner([async () => result]);
-					await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toMatchObject({
+					await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toEqual({
 						decision: "escalate",
 					});
 				}
@@ -2823,9 +2897,7 @@ describe("ExtensionRunner", () => {
 			});
 			it("exposes the public result contract types", () => {
 				expectTypeOf<ToolApprovalReviewResult>().toEqualTypeOf<
-					| { decision: "approve"; rationale?: string }
-					| { decision: "escalate"; reason?: string }
-					| { decision: "deny"; reason?: string }
+					{ decision: "approve" } | { decision: "escalate" } | { decision: "deny"; reason?: string }
 				>();
 			});
 
@@ -2852,7 +2924,6 @@ describe("ExtensionRunner", () => {
 						input: {},
 					},
 				]);
-				clearTrace();
 			});
 
 			it("review escalation falls through to exactly one native selector with native approval events preserved", async () => {
@@ -2871,7 +2942,6 @@ describe("ExtensionRunner", () => {
 					{ kind: "ui_select" },
 					{ kind: "resolved", approved: true },
 				]);
-				clearTrace();
 			});
 
 			it("with no review handler the native selector runs unchanged", async () => {
@@ -2882,7 +2952,6 @@ describe("ExtensionRunner", () => {
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).toHaveBeenCalledTimes(1);
 				expect(trace).toEqual([{ kind: "requested" }, { kind: "ui_select" }, { kind: "resolved", approved: true }]);
-				clearTrace();
 			});
 
 			it("a throwing review handler escalates to the native selector", async () => {
@@ -2901,7 +2970,6 @@ describe("ExtensionRunner", () => {
 					{ kind: "ui_select" },
 					{ kind: "resolved", approved: true },
 				]);
-				clearTrace();
 			});
 
 			it("a timed-out review handler escalates to the native selector", async () => {
@@ -2921,7 +2989,6 @@ describe("ExtensionRunner", () => {
 					{ kind: "ui_select" },
 					{ kind: "resolved", approved: true },
 				]);
-				clearTrace();
 			});
 
 			it("cancellation during review never executes the tool", async () => {
@@ -2967,12 +3034,27 @@ describe("ExtensionRunner", () => {
 				expect(select).not.toHaveBeenCalled();
 				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
 				expect(trace.some(entry => entry.kind === "requested")).toBe(false);
-				clearTrace();
+			});
+			it("cancellation after an approve result still prevents execution", async () => {
+				const trace = setTrace();
+				const runner = dispatchRunner([]);
+				const controller = new AbortController();
+				vi.spyOn(runner, "emitToolApprovalReview").mockImplementation(async () => {
+					controller.abort();
+					return { decision: "approve" };
+				});
+
+				await expect(
+					executeReviewCase(runner, recordingApprovalTool(), "call-review-approve-abort", {
+						signal: controller.signal,
+					}),
+				).rejects.toThrow();
+				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
 			});
 
 			it("approve + escalate handlers are not last-result-wins: the native selector decides", async () => {
 				const trace = setTrace();
-				fs.writeFileSync(
+				await Bun.write(
 					path.join(extensionsDir, "review-b-escalate.ts"),
 					`export default function(pi) {
 						pi.on("tool_approval_review", async () => {
@@ -2993,7 +3075,6 @@ describe("ExtensionRunner", () => {
 				expect(trace[2]).toEqual({ kind: "requested" });
 				expect(trace[3]).toEqual({ kind: "ui_select" });
 				expect(trace[4]).toEqual({ kind: "resolved", approved: true });
-				clearTrace();
 			});
 
 			it("explicit user tools.approval prompt never emits review", async () => {
@@ -3016,7 +3097,28 @@ describe("ExtensionRunner", () => {
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).toHaveBeenCalledTimes(1);
 				expect(trace).toEqual([{ kind: "requested" }, { kind: "ui_select" }, { kind: "resolved", approved: true }]);
-				clearTrace();
+			});
+			it("invalid user policies do not suppress eligible approval review", async () => {
+				const trace = setTrace();
+				const { runner, select } = await reviewRunnerFromFile(
+					"review-invalid-user-policy.ts",
+					reviewExtensionCode(`return { decision: "approve" };`),
+				);
+				const result = await executeReviewCase(runner, recordingApprovalTool(), "call-invalid-user-policy", {
+					settings: {
+						get: (key: string) =>
+							key === "tools.approvalMode"
+								? "always-ask"
+								: key === "tools.approval"
+									? { dangerous_tool: "not-a-policy" }
+									: {},
+					},
+				});
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(select).not.toHaveBeenCalled();
+				expect(trace).toContainEqual(expect.objectContaining({ kind: "review" }));
+				expect(trace).toContainEqual(expect.objectContaining({ kind: "executed" }));
 			});
 
 			it("tool override prompt never emits review", async () => {
@@ -3031,7 +3133,6 @@ describe("ExtensionRunner", () => {
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).toHaveBeenCalledTimes(1);
 				expect(trace).toEqual([{ kind: "requested" }, { kind: "ui_select" }, { kind: "resolved", approved: true }]);
-				clearTrace();
 			});
 
 			it("user and tool deny never emit review and never execute", async () => {
@@ -3053,14 +3154,38 @@ describe("ExtensionRunner", () => {
 										: {},
 						},
 					}),
-				).rejects.toThrow();
+				).rejects.toThrow('Tool "dangerous_tool" is blocked by user policy.');
 				const denyTool = { ...approvalTool, approval: { policy: "deny", tier: "exec", reason: "no" } as const };
-				await expect(executeReviewCase(runner, denyTool, "call-tool-deny")).rejects.toThrow();
+				await expect(executeReviewCase(runner, denyTool, "call-tool-deny")).rejects.toThrow(
+					'Tool "dangerous_tool" is blocked by tool policy.\nReason: no',
+				);
 
 				expect(select).not.toHaveBeenCalled();
 				expect(trace.some(entry => entry.kind === "review")).toBe(false);
 				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
-				clearTrace();
+			});
+			it("transformed native deny never dispatches approval review", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" }));
+				const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ran" }] }));
+				const runner = dispatchRunner([reviewHandler], [async () => ({ input: { command: "rm -rf" } })]);
+				const tool = {
+					...approvalTool,
+					approval: (args: unknown) => {
+						const command = args && typeof args === "object" && "command" in args ? args.command : undefined;
+						return command === "rm -rf"
+							? ({ policy: "deny", tier: "exec", reason: "dangerous" } as const)
+							: ("exec" as const);
+					},
+					execute,
+				} as AgentTool;
+
+				await expect(
+					executeReviewCase(runner, tool, "call-transformed-native-deny", {
+						params: { command: "echo original" },
+					}),
+				).rejects.toThrow('Tool "dangerous_tool" is blocked by tool policy.\nReason: dangerous');
+				expect(reviewHandler).not.toHaveBeenCalled();
+				expect(execute).not.toHaveBeenCalled();
 			});
 
 			it("provider computer safety never emits review and still requires native approval", async () => {
@@ -3091,13 +3216,7 @@ describe("ExtensionRunner", () => {
 					},
 				};
 				const wrapper = new ExtensionToolWrapper(recordingApprovalTool(), runner);
-				const result = await (wrapper as ExtensionToolWrapper<any>).execute(
-					toolCallId,
-					{},
-					undefined,
-					undefined,
-					context as never,
-				);
+				const result = await wrapper.execute(toolCallId, {} as never, undefined, undefined, context as never);
 
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).toHaveBeenCalledTimes(1);
@@ -3109,7 +3228,6 @@ describe("ExtensionRunner", () => {
 					{ kind: "executed", params: {} },
 				]);
 				expect(context.providerSafetyApproved).toBe(true);
-				clearTrace();
 			});
 
 			it("yolo-resolved allow never emits review", async () => {
@@ -3125,7 +3243,6 @@ describe("ExtensionRunner", () => {
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).not.toHaveBeenCalled();
 				expect(trace).toEqual([{ kind: "executed", params: {} }]);
-				clearTrace();
 			});
 
 			it("review event input is the exact final effective execution input and is what executes", async () => {
@@ -3155,26 +3272,164 @@ describe("ExtensionRunner", () => {
 				// executes — no derived view, no rewrite channel.
 				expect(review?.input).toEqual(executed?.params);
 				expect(Object.isFrozen(review?.input)).toBe(true);
-				clearTrace();
 			});
 
-			it("review event input carries the exact deobfuscated execution value", async () => {
+			it("owns transformed input before review so a retained alias cannot change execution", async () => {
 				const trace = setTrace();
-				const { runner } = await reviewRunnerFromFile(
-					"review-secret.ts",
-					reviewExtensionCode(`return { decision: "approve" };`),
+				const retainedInput = { command: "echo reviewed" };
+				const reviewStarted = Promise.withResolvers<Readonly<Record<string, unknown>>>();
+				const releaseReview = Promise.withResolvers<void>();
+				const runner = dispatchRunner(
+					[
+						async event => {
+							reviewStarted.resolve(event.input);
+							await releaseReview.promise;
+							return { decision: "approve" };
+						},
+					],
+					[async () => ({ input: retainedInput })],
 				);
-				// The host deobfuscates secret placeholders before the wrapper sees the call;
-				// review must see the same final value that would reach the tool.
-				const secretCommand = "deploy --token sk-live-abc123";
-				const result = await executeReviewCase(runner, recordingApprovalTool(), "call-secret-input", {
-					params: { command: secretCommand },
+				const tool = {
+					...recordingApprovalTool(),
+					approval: (args: unknown) => {
+						const command = args && typeof args === "object" && "command" in args ? args.command : undefined;
+						return command === "rm -rf"
+							? ({ policy: "deny", tier: "exec", reason: "dangerous" } as const)
+							: ("exec" as const);
+					},
+				};
+				const execution = executeReviewCase(runner, tool, "call-review-owned-input", {
+					params: { command: "echo original" },
 				});
 
+				const reviewedInput = await reviewStarted.promise;
+				retainedInput.command = "rm -rf";
+				releaseReview.resolve();
+				await execution;
+
+				expect(reviewedInput).toEqual({ command: "echo reviewed" });
+				expect(trace).toContainEqual({ kind: "executed", params: { command: "echo reviewed" } });
+			});
+
+			it("reviews an immutable snapshot while execution keeps mutable owned params", async () => {
+				const trace = setTrace();
+				const retainedInput = { command: "echo reviewed" };
+				const reviewStarted = Promise.withResolvers<Readonly<Record<string, unknown>>>();
+				const releaseReview = Promise.withResolvers<void>();
+				const reviewed: Array<Readonly<Record<string, unknown>>> = [];
+				const executed: Array<{ command: string }> = [];
+				const runner = dispatchRunner(
+					[
+						async event => {
+							reviewStarted.resolve(event.input);
+							await releaseReview.promise;
+							reviewed.push(event.input);
+							return { decision: "approve" };
+						},
+					],
+					[async () => ({ input: retainedInput })],
+				);
+				const base = recordingApprovalTool();
+				const tool = {
+					...base,
+					execute: async (toolCallId: string, params: unknown) => {
+						const owned = params as { command: string };
+						executed.push(owned);
+						// A tool may mutate its own validated params internally.
+						owned.command = "echo mutated-by-tool";
+						return base.execute(toolCallId, owned);
+					},
+				};
+				const execution = executeReviewCase(runner, tool, "call-review-snapshot-isolation", {
+					params: { command: "echo original" },
+				});
+
+				const reviewedInput = await reviewStarted.promise;
+				retainedInput.command = "rm -rf";
+				releaseReview.resolve();
+				const result = await execution;
+
 				expect(firstReviewText(result)).toBe("ok");
-				const review = trace.find(entry => entry.kind === "review");
-				expect(review?.input).toEqual({ command: secretCommand });
-				clearTrace();
+				expect(reviewedInput).toEqual({ command: "echo reviewed" });
+				expect(reviewed).toEqual([{ command: "echo reviewed" }]);
+				expect(Object.isFrozen(reviewed[0])).toBe(true);
+				expect(Object.isFrozen(executed[0])).toBe(false);
+				expect(executed[0]).toEqual({ command: "echo mutated-by-tool" });
+				expect(trace).toContainEqual({ kind: "executed", params: { command: "echo mutated-by-tool" } });
+			});
+
+			it("reviews and executes the value produced by the real agent-loop transformation path", async () => {
+				const reviewedInputs: Array<Readonly<Record<string, unknown>>> = [];
+				const executedInputs: unknown[] = [];
+				const runner = dispatchRunner([
+					async event => {
+						reviewedInputs.push(event.input);
+						return { decision: "approve" };
+					},
+				]);
+				const parameters = Type.Object({ command: Type.String(), timeout: Type.Number() });
+				const tool: AgentTool<typeof parameters> = {
+					name: "dangerous_tool",
+					label: "Dangerous Tool",
+					description: "Test tool",
+					parameters,
+					approval: "exec",
+					execute: async (_toolCallId, params) => {
+						executedInputs.push(params);
+						return { content: [{ type: "text", text: "ok" }] };
+					},
+				};
+				const wrapped = new ExtensionToolWrapper(tool, runner);
+				const context: AgentContext = { systemPrompt: [""], messages: [], tools: [wrapped] };
+				const rawArguments = { command: "$$secret-command$$", timeout: 10_000 };
+				const transformedArguments = { command: "deploy --token sk-live-abc123", timeout: 5_000 };
+				const mock = createMockModel({
+					responses: [
+						{
+							content: [
+								{
+									type: "toolCall",
+									id: "call-transformed-input",
+									name: "dangerous_tool",
+									arguments: rawArguments,
+								},
+							],
+						},
+						{ content: ["done"] },
+					],
+				});
+				const config: AgentLoopConfig = {
+					model: mock.model,
+					convertToLlm: messages =>
+						messages.filter(
+							message =>
+								message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+						) as Message[],
+					transformToolCallArguments: () => transformedArguments,
+					getToolContext: toolCall =>
+						({
+							sessionManager,
+							modelRegistry,
+							model: undefined,
+							isIdle: () => true,
+							hasQueuedMessages: () => false,
+							abort: () => {},
+							settings: alwaysAskSettings,
+							toolCall,
+						}) as never,
+				};
+
+				await agentLoop(
+					[{ role: "user", content: "deploy", timestamp: Date.now() }],
+					context,
+					config,
+					undefined,
+					mock.stream,
+				).result();
+
+				expect(reviewedInputs).toEqual([transformedArguments]);
+				expect(executedInputs).toEqual([transformedArguments]);
+				expect(reviewedInputs[0]).not.toEqual(rawArguments);
 			});
 
 			it("a rewrite attempt inside an approve result is ignored and escalates to the native selector", async () => {
@@ -3195,10 +3450,9 @@ describe("ExtensionRunner", () => {
 				const executed = trace.find(entry => entry.kind === "executed");
 				expect(executed?.params).toEqual({ command: "echo good" });
 				expect(JSON.stringify(trace)).not.toContain("evil");
-				clearTrace();
 			});
 
-			it("review deny rejects via native denial path without selector or execution", async () => {
+			it("review deny reports an extension veto without selector or execution", async () => {
 				const trace = setTrace();
 				const { runner, select } = await reviewRunnerFromFile(
 					"review-deny.ts",
@@ -3209,18 +3463,17 @@ describe("ExtensionRunner", () => {
 					executeReviewCase(runner, recordingApprovalTool(), "call-review-deny", {
 						params: { command: "echo good" },
 					}),
-				).rejects.toThrow('Tool "dangerous_tool" is blocked by tool policy.\nReason: reviewer refuses');
+				).rejects.toThrow('Tool "dangerous_tool" was denied by an extension approval review: reviewer refuses');
 
 				expect(select).not.toHaveBeenCalled();
 				expect(trace).toHaveLength(1);
 				expect(trace[0]).toMatchObject({ kind: "review", toolCallId: "call-review-deny" });
 				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
-				clearTrace();
 			});
 
 			it("headless review escalation keeps the no-UI failure while headless review approval executes", async () => {
 				const trace = setTrace();
-				fs.writeFileSync(
+				await Bun.write(
 					path.join(extensionsDir, "review-headless.ts"),
 					reviewExtensionCode(`
 						if (event.toolCallId.startsWith("headless-escalate")) return { decision: "escalate" };
@@ -3246,7 +3499,6 @@ describe("ExtensionRunner", () => {
 				expect(trace.filter(entry => entry.kind === "review")).toHaveLength(2);
 				expect(trace.some(entry => entry.kind === "ui_select")).toBe(false);
 				expect(trace.some(entry => entry.kind === "executed")).toBe(true);
-				clearTrace();
 			});
 
 			it("xdev-bypassed dispatch is neither reviewed nor re-prompted", async () => {
@@ -3262,8 +3514,6 @@ describe("ExtensionRunner", () => {
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).not.toHaveBeenCalled();
 				expect(trace).toEqual([{ kind: "executed", params: {} }]);
-
-				clearTrace();
 			});
 
 			it("a handler mutation attempt escalates and the pristine input executes", async () => {
@@ -3286,33 +3536,50 @@ describe("ExtensionRunner", () => {
 				const executed = trace.find(entry => entry.kind === "executed");
 				expect(executed?.params).toEqual({ command: "echo good", nested: { flag: "keep" } });
 				expect(JSON.stringify(trace)).not.toContain("evil");
-				clearTrace();
 			});
 
-			it("a mutation attempt cannot leak to later handlers or the caller's event", async () => {
-				const seenInputs: Array<Record<string, unknown>> = [];
+			it("top-level mutation attempts cannot change what later handlers review", async () => {
+				const seenEvents: ToolApprovalReviewEvent[] = [];
 				const runner = dispatchRunner([
 					async event => {
-						event.input.command = "evil";
+						const writableEvent = event as {
+							input: Record<string, unknown>;
+							toolName: string;
+							tier: string;
+						};
+						for (const mutate of [
+							() => {
+								writableEvent.input = { command: "evil" };
+							},
+							() => {
+								writableEvent.toolName = "other_tool";
+							},
+							() => {
+								writableEvent.tier = "read";
+							},
+						]) {
+							try {
+								mutate();
+							} catch {}
+						}
 						return { decision: "approve" };
 					},
 					async event => {
-						seenInputs.push(event.input);
+						seenEvents.push(event);
 						return { decision: "approve" };
 					},
 				]);
-				await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toMatchObject({
-					decision: "escalate",
+				await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toEqual({
+					decision: "approve",
 				});
 
-				expect(seenInputs).toEqual([{ command: "echo hi" }]);
-				expect(Object.isFrozen(seenInputs[0])).toBe(true);
-				expect(dispatchEvent.input).toEqual({ command: "echo hi" });
-				expect(Object.isFrozen(dispatchEvent.input)).toBe(false);
+				expect(seenEvents).toEqual([dispatchEvent]);
+				expect(Object.isFrozen(seenEvents[0])).toBe(true);
+				expect(Object.isFrozen(seenEvents[0]?.input)).toBe(true);
 			});
 
 			it("a nested mutation attempt cannot alter the reviewed snapshot", async () => {
-				const seenInputs: Array<Record<string, unknown>> = [];
+				const seenInputs: Array<Readonly<Record<string, unknown>>> = [];
 				const runner = dispatchRunner([
 					async event => {
 						(event.input.nested as Record<string, unknown>).flag = "evil";
@@ -3333,23 +3600,66 @@ describe("ExtensionRunner", () => {
 
 				expect(seenInputs).toEqual([{ command: "echo hi", nested: { flag: "keep" } }]);
 			});
+			it("unsupported mutable input escalates without dispatching a handler", async () => {
+				const handler = vi.fn(async () => ({ decision: "approve" as const }));
+				const runner = dispatchRunner([handler]);
+				const event = {
+					...dispatchEvent,
+					input: { commands: new Map([["command", "echo hi"]]) },
+				} as ToolApprovalReviewEvent;
 
-			it("extensions detect tool_approval_review support via pi.supportedEvents", async () => {
+				await expect(runner.emitToolApprovalReview(event)).resolves.toEqual({ decision: "escalate" });
+				expect(handler).not.toHaveBeenCalled();
+			});
+
+			it("exposes immutable approval review capability metadata", async () => {
 				setTrace();
-				fs.writeFileSync(
+				await Bun.write(
 					path.join(extensionsDir, "review-capability.ts"),
 					`export default function(pi) {
+						const supportedEvents = pi.supportedEvents;
+						let mutationBlocked = false;
+						try {
+							supportedEvents.push("invented_event");
+						} catch {
+							mutationBlocked = true;
+						}
 						globalThis.__reviewTrace.push({
 							kind: "capability",
-							supported: pi.supportedEvents.includes("tool_approval_review"),
+							supported: supportedEvents?.includes("tool_approval_review") ?? false,
+							frozen: Object.isFrozen(supportedEvents),
+							mutationBlocked,
+							unchanged: !supportedEvents?.includes("invented_event"),
 						});
 					}`,
 				);
 				await loadTestExtensions();
 
 				const entry = (globalWithReview.__reviewTrace ?? []).find(item => item.kind === "capability");
-				expect(entry?.supported).toBe(true);
-				clearTrace();
+				expect(entry).toMatchObject({
+					supported: true,
+					frozen: true,
+					mutationBlocked: true,
+					unchanged: true,
+				});
+			});
+
+			it("the documented capability pattern stays false without throwing when supportedEvents is absent", async () => {
+				setTrace();
+				await Bun.write(
+					path.join(extensionsDir, "review-capability-legacy.ts"),
+					`export default function(pi) {
+						delete pi.supportedEvents;
+						globalThis.__reviewTrace.push({
+							kind: "legacy-capability",
+							supported: pi.supportedEvents?.includes("tool_approval_review") ?? false,
+						});
+					}`,
+				);
+				await loadTestExtensions();
+
+				const entry = (globalWithReview.__reviewTrace ?? []).find(item => item.kind === "legacy-capability");
+				expect(entry).toEqual({ kind: "legacy-capability", supported: false });
 			});
 		});
 	});
