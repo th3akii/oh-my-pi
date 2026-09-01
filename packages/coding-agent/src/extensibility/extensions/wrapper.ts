@@ -152,9 +152,10 @@ function extensionReviewDenyError(toolName: string, reason?: string): Error {
  * - Emits tool_call event before execution (can block)
  * - Emits tool_result event after execution (can modify result)
  */
-export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetails = unknown>
-	implements AgentTool<TParameters, TDetails>
-{
+export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetails = unknown> implements AgentTool<
+	TParameters,
+	TDetails
+> {
 	declare name: string;
 	declare description: string;
 	declare parameters: TParameters;
@@ -405,6 +406,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		let executionError: Error | undefined;
 
 		try {
+<<<<<<< HEAD
 			// A denied file write or delete inside this tool can be brokered to an
 			// extension handler, and that registry is PROCESS-WIDE — so the session is
 			// named here, the one place where every tool's execution and the runner
@@ -413,6 +415,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// fallback registered: no scope is entered.
 			result = await withFileMutationSession(this.runner.sessionId, () =>
 				this.tool.execute(toolCallId, finalParams, signal, onUpdate, context),
+=======
+			// Name the owning session for process-wide file-mutation fallbacks and
+			// expose its settings to registered tools and any fallback handlers they
+			// trigger. `sdk.ts` wraps the whole tool registry with this class whenever
+			// a runner exists.
+			result = await this.runner.runScoped(() =>
+				withFileMutationSession(this.runner.sessionId, () =>
+					this.tool.execute(toolCallId, effectiveParams, signal, onUpdate, context),
+				),
+>>>>>>> refs/remotes/upstream-tag/v18.1.2
 			);
 		} catch (err) {
 			executionError = err instanceof Error ? err : new Error(String(err));
