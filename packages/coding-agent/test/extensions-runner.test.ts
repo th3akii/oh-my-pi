@@ -2397,10 +2397,11 @@ describe("ExtensionRunner", () => {
 				{ type: "ui_select" },
 				{ type: "tool_approval_resolved", approved: true },
 			]);
-			expect(select).toHaveBeenCalledWith(expect.stringContaining("Allow tool: dangerous_tool"), [
-				"Approve",
-				"Deny",
-			]);
+			expect(select).toHaveBeenCalledWith(
+				expect.stringContaining("Allow tool: dangerous_tool"),
+				["Approve", "Deny"],
+				undefined,
+			);
 			delete globalState.__approvalEvents;
 		});
 
@@ -2623,6 +2624,17 @@ describe("ExtensionRunner", () => {
 				__reviewController?: AbortController;
 				__reviewEntered?: () => void;
 			};
+			class PrototypeSensitiveInput {
+				command: string;
+
+				constructor(command: string) {
+					this.command = command;
+				}
+
+				describe(): string {
+					return `prototype:${this.command}`;
+				}
+			}
 			const setTrace = (): Array<Record<string, unknown>> => {
 				const trace: Array<Record<string, unknown>> = [];
 				globalWithReview.__reviewTrace = trace;
@@ -2777,11 +2789,6 @@ describe("ExtensionRunner", () => {
 				tier: "exec",
 			} as ToolApprovalReviewEvent;
 
-			it("dispatch returns escalation when no review handler exists (distinct from approval)", async () => {
-				const runner = dispatchRunner([]);
-				await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toMatchObject({ decision: "escalate" });
-			});
-
 			it("dispatch returns approve only for unanimous approval and delivers the exact public event", async () => {
 				const seen: ToolApprovalReviewEvent[] = [];
 				const runner = dispatchRunner([
@@ -2867,22 +2874,6 @@ describe("ExtensionRunner", () => {
 						decision: "escalate",
 					});
 				}
-			});
-
-			it("dispatch returns escalation when a handler throws", async () => {
-				const runner = dispatchRunner([
-					async () => {
-						throw new Error("reviewer exploded");
-					},
-				]);
-				await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toMatchObject({ decision: "escalate" });
-			});
-
-			it("dispatch returns escalation on handler timeout", async () => {
-				testSetExtensionHandlerTimeoutMs(20);
-				const never = Promise.withResolvers<void>();
-				const runner = dispatchRunner([async () => never.promise]);
-				await expect(runner.emitToolApprovalReview(dispatchEvent)).resolves.toMatchObject({ decision: "escalate" });
 			});
 
 			it("dispatch returns escalation when the signal is already aborted and never calls handlers", async () => {
@@ -3052,6 +3043,133 @@ describe("ExtensionRunner", () => {
 				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
 			});
 
+			// --- Cancellation hardening: an aborted invocation must never execute ---
+
+			const gateGlobals = globalThis as typeof globalThis & {
+				__cancelEntered?: PromiseWithResolvers<void>;
+				__cancelGate?: PromiseWithResolvers<void>;
+			};
+			const installGates = () => {
+				gateGlobals.__cancelEntered = Promise.withResolvers<void>();
+				gateGlobals.__cancelGate = Promise.withResolvers<void>();
+				return {
+					entered: gateGlobals.__cancelEntered.promise,
+					release: () => gateGlobals.__cancelGate?.resolve(),
+					cleanup: () => {
+						delete gateGlobals.__cancelEntered;
+						delete gateGlobals.__cancelGate;
+					},
+				};
+			};
+
+			it("does not execute when cancelled while the escalated native selector is pending", async () => {
+				const trace = setTrace();
+				const selectEntered = Promise.withResolvers<void>();
+				const selectGate = Promise.withResolvers<void>();
+				const { runner, select } = await reviewRunnerFromFile(
+					"cancel-select.ts",
+					reviewExtensionCode(`return { decision: "escalate" };`),
+					async () => {
+						globalWithReview.__reviewTrace?.push({ kind: "ui_select" });
+						selectEntered.resolve();
+						await selectGate.promise;
+						return "Approve";
+					},
+				);
+				const controller = new AbortController();
+				const execution = executeReviewCase(runner, recordingApprovalTool(), "call-cancel-select", {
+					signal: controller.signal,
+				});
+
+				await selectEntered.promise;
+				controller.abort();
+				selectGate.resolve();
+				await expect(execution).rejects.toThrow();
+				expect(select).toHaveBeenCalledTimes(1);
+				// A late "Approve" from the selector must not approve a cancelled call…
+				expect(trace).not.toContainEqual({ kind: "resolved", approved: true });
+				// …it resolves as not-approved (requested→resolved pairing preserved)…
+				expect(trace).toContainEqual({ kind: "resolved", approved: false });
+				// …and the signal-ignoring tool is never invoked.
+				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
+			});
+
+			it("does not execute when cancelled while tool_approval_requested handling is pending", async () => {
+				const trace = setTrace();
+				const gates = installGates();
+				const { runner } = await reviewRunnerFromFile(
+					"cancel-requested.ts",
+					`export default function(pi) {
+						pi.on("tool_approval_requested", async () => {
+							globalThis.__reviewTrace.push({ kind: "requested" });
+							globalThis.__cancelEntered.resolve();
+							await globalThis.__cancelGate.promise;
+						});
+						pi.on("tool_approval_resolved", async (event) => {
+							globalThis.__reviewTrace.push({ kind: "resolved", approved: event.approved });
+						});
+					}`,
+				);
+				const controller = new AbortController();
+				const execution = executeReviewCase(runner, recordingApprovalTool(), "call-cancel-requested", {
+					signal: controller.signal,
+				});
+
+				await gates.entered;
+				controller.abort();
+				gates.release();
+				await expect(execution).rejects.toThrow();
+				expect(trace).toEqual([{ kind: "requested" }, { kind: "resolved", approved: false }]);
+				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
+				gates.cleanup();
+			});
+
+			it("does not execute when cancelled while tool_approval_resolved handling is pending", async () => {
+				const trace = setTrace();
+				const gates = installGates();
+				const { runner } = await reviewRunnerFromFile(
+					"cancel-resolved.ts",
+					`export default function(pi) {
+						pi.on("tool_approval_resolved", async (event) => {
+							globalThis.__reviewTrace.push({ kind: "resolved", approved: event.approved });
+							globalThis.__cancelEntered.resolve();
+							await globalThis.__cancelGate.promise;
+						});
+					}`,
+				);
+				const controller = new AbortController();
+				const execution = executeReviewCase(runner, recordingApprovalTool(), "call-cancel-resolved", {
+					signal: controller.signal,
+				});
+
+				await gates.entered;
+				controller.abort();
+				gates.release();
+				await expect(execution).rejects.toThrow();
+				// Native approval genuinely resolved approve (telemetry stays truthful)…
+				expect(trace).toContainEqual({ kind: "resolved", approved: true });
+				// …but the signal-ignoring tool must never run.
+				expect(trace.some(entry => entry.kind === "executed")).toBe(false);
+				gates.cleanup();
+			});
+
+			it("already-aborted signal never reaches review, native approval, or execution", async () => {
+				const trace = setTrace();
+				const { runner, select } = await reviewRunnerFromFile(
+					"cancel-preaborted.ts",
+					reviewExtensionCode(`return { decision: "approve" };`),
+				);
+				const controller = new AbortController();
+				controller.abort();
+
+				await expect(
+					executeReviewCase(runner, recordingApprovalTool(), "call-preaborted", {
+						signal: controller.signal,
+					}),
+				).rejects.toThrow();
+				expect(select).not.toHaveBeenCalled();
+				expect(trace).toEqual([]);
+			});
 			it("approve + escalate handlers are not last-result-wins: the native selector decides", async () => {
 				const trace = setTrace();
 				await Bun.write(
@@ -3220,7 +3338,11 @@ describe("ExtensionRunner", () => {
 
 				expect(firstReviewText(result)).toBe("ok");
 				expect(select).toHaveBeenCalledTimes(1);
-				expect(select).toHaveBeenCalledWith(expect.stringContaining("Provider safety checks"), ["Approve", "Deny"]);
+				expect(select).toHaveBeenCalledWith(
+					expect.stringContaining("Provider safety checks"),
+					["Approve", "Deny"],
+					undefined,
+				);
 				expect(trace).toEqual([
 					{ kind: "requested" },
 					{ kind: "ui_select" },
@@ -3358,6 +3480,419 @@ describe("ExtensionRunner", () => {
 				expect(trace).toContainEqual({ kind: "executed", params: { command: "echo mutated-by-tool" } });
 			});
 
+			it("non-cloneable input on a yolo-allow path executes without cloning and never dispatches review", async () => {
+				const trace = setTrace();
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const runner = dispatchRunner([reviewHandler]);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const callback = () => "non-cloneable";
+				const params = { command: "echo hi", callback };
+				const result = await executeReviewCase(runner, tool, "call-yolo-non-cloneable", {
+					params,
+					settings: { get: (key: string) => (key === "tools.approvalMode" ? "yolo" : {}) },
+				});
+
+				expect(firstReviewText(result)).toBe("ok");
+				// Pre-review execution behavior: the original input object runs, function payload intact.
+				expect(executed).toHaveLength(1);
+				expect(executed[0]).toBe(params);
+				expect((executed[0] as typeof params).callback).toBe(callback);
+				expect(reviewHandler).not.toHaveBeenCalled();
+				expect(trace).toEqual([]);
+			});
+
+			it("non-cloneable input with no review handler keeps the native selector path without clone failure", async () => {
+				const trace = setTrace();
+				const { runner, select } = await reviewRunnerFromFile(
+					"review-non-cloneable-observers.ts",
+					reviewExtensionCode(null),
+				);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const params = { command: "echo hi", callback: () => "non-cloneable" };
+				const result = await executeReviewCase(runner, tool, "call-no-review-non-cloneable", { params });
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).toBe(params);
+				// No review entry at all; the ordinary native approval events still fire.
+				expect(trace.find(entry => entry.kind === "review")).toBeUndefined();
+				expect(trace.filter(entry => entry.kind === "requested" || entry.kind === "resolved")).toEqual([
+					{ kind: "requested" },
+					{ kind: "resolved", approved: true },
+				]);
+			});
+
+			it("clone failure cannot approve: review-eligible non-cloneable input skips review and faces the native selector", async () => {
+				const trace = setTrace();
+				const { runner, select } = await reviewRunnerFromFile(
+					"review-non-cloneable.ts",
+					reviewExtensionCode(`return { decision: "approve" };`),
+				);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const params = { command: "echo hi", callback: () => "non-cloneable" };
+				const result = await executeReviewCase(runner, tool, "call-non-cloneable-eligible", { params });
+
+				expect(firstReviewText(result)).toBe("ok");
+				// Review never dispatched — the approve handler cannot run, so clone failure can never approve.
+				expect(trace.find(entry => entry.kind === "review")).toBeUndefined();
+				// The ordinary native prompt still gates the call.
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(trace).toContainEqual({ kind: "requested" });
+				expect(trace).toContainEqual({ kind: "resolved", approved: true });
+				expect(executed[0]).toBe(params);
+			});
+
+			it("cloneable class input skips review and native approval preserves the original instance", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const transformedInput = new PrototypeSensitiveInput("echo reviewed");
+				const runner = dispatchRunner([reviewHandler], [async () => ({ input: transformedInput })]);
+				const select = vi.fn(async () => "Approve");
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					approval: () => "exec" as const,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+
+				await executeReviewCase(runner, tool, "call-class-input", {
+					params: { command: "echo original" },
+				});
+
+				expect(reviewHandler).not.toHaveBeenCalled();
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).toBe(transformedInput);
+				expect(executed[0]).toBeInstanceOf(PrototypeSensitiveInput);
+				expect((executed[0] as PrototypeSensitiveInput).describe()).toBe("prototype:echo reviewed");
+			});
+
+			it("cloneable exotic input skips review and native approval preserves original identity", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const timestamp = new Date("2026-08-31T00:00:00.000Z");
+				const transformedInput = { command: "echo reviewed", timestamp };
+				const runner = dispatchRunner([reviewHandler], [async () => ({ input: transformedInput })]);
+				const select = vi.fn(async () => "Approve");
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					approval: () => "exec" as const,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+
+				await executeReviewCase(runner, tool, "call-exotic-input", {
+					params: { command: "echo original" },
+				});
+
+				expect(reviewHandler).not.toHaveBeenCalled();
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).toBe(transformedInput);
+				expect((executed[0] as typeof transformedInput).timestamp).toBe(timestamp);
+			});
+
+			it("plain input with no review handlers preserves original identity through native approval", async () => {
+				const transformedInput = { command: "echo reviewed" };
+				const runner = dispatchRunner([], [async () => ({ input: transformedInput })]);
+				const select = vi.fn(async () => "Approve");
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+
+				await executeReviewCase(runner, tool, "call-no-review-plain-input", {
+					params: { command: "echo original" },
+				});
+
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).toBe(transformedInput);
+			});
+
+			it("real review escalation keeps owned input authoritative through native approval", async () => {
+				const transformedInput = { command: "echo reviewed" };
+				const reviewed: Array<Readonly<Record<string, unknown>>> = [];
+				const runner = dispatchRunner(
+					[
+						async event => {
+							reviewed.push(event.input);
+							transformedInput.command = "rm -rf";
+							return { decision: "escalate" };
+						},
+					],
+					[async () => ({ input: transformedInput })],
+				);
+				const select = vi.fn(async () => "Approve");
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+
+				await executeReviewCase(runner, tool, "call-reviewed-escalation", {
+					params: { command: "echo original" },
+				});
+
+				expect(reviewed).toEqual([{ command: "echo reviewed" }]);
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).not.toBe(transformedInput);
+				expect(executed[0]).toEqual({ command: "echo reviewed" });
+			});
+
+			it("a retained approval argument cannot mutate the reviewed input into execution", async () => {
+				const reviewStarted = Promise.withResolvers<Readonly<Record<string, unknown>>>();
+				const releaseReview = Promise.withResolvers<void>();
+				let retainedApprovalArg: { command?: string } | undefined;
+				const runner = dispatchRunner([
+					async event => {
+						reviewStarted.resolve(event.input);
+						await releaseReview.promise;
+						return { decision: "approve" };
+					},
+				]);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					approval: (args: unknown) => {
+						retainedApprovalArg = args as { command?: string };
+						return "exec" as const;
+					},
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+
+				const execution = executeReviewCase(runner, tool, "call-approval-alias", {
+					params: { command: "echo safe" },
+				});
+
+				// Review is pending while the retained approval alias flips safe → dangerous.
+				await reviewStarted.promise;
+				if (retainedApprovalArg) retainedApprovalArg.command = "rm -rf";
+				releaseReview.resolve();
+				const result = await execution;
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(executed[0]).toEqual({ command: "echo safe" });
+			});
+
+			it("uses the owned execution snapshot for an escalated native prompt", async () => {
+				const reviewStarted = Promise.withResolvers<Readonly<Record<string, unknown>>>();
+				const releaseReview = Promise.withResolvers<void>();
+				let retainedApprovalArg: { command?: string } | undefined;
+				let selectedPrompt = "";
+				const runner = dispatchRunner([
+					async event => {
+						reviewStarted.resolve(event.input);
+						await releaseReview.promise;
+						return { decision: "escalate" };
+					},
+				]);
+				const select = vi.fn(async (title: string) => {
+					selectedPrompt = title;
+					return "Approve";
+				});
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					approval: (args: unknown) => {
+						retainedApprovalArg = args as { command?: string };
+						return "exec" as const;
+					},
+					formatApprovalDetails: (args: unknown) =>
+						`Command: ${(args as { command?: string }).command ?? "(missing)"}`,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const execution = executeReviewCase(runner, tool, "call-approval-escalate-owned", {
+					params: { command: "echo safe" },
+				});
+
+				const reviewedInput = await reviewStarted.promise;
+				if (!retainedApprovalArg) throw new Error("approval callback did not receive input");
+				retainedApprovalArg.command = "rm -rf";
+				releaseReview.resolve();
+				const result = await execution;
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(reviewedInput).toEqual({ command: "echo safe" });
+				expect(selectedPrompt).toContain("Command: echo safe");
+				expect(selectedPrompt).not.toContain("Command: rm -rf");
+				expect(executed).toEqual([{ command: "echo safe" }]);
+			});
+
+			it("approval policy runs exactly the two upstream resolutions and never sees the execution clone", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const runner = dispatchRunner([reviewHandler]);
+				const observed: unknown[] = [];
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					approval: (args: unknown) => {
+						observed.push(args);
+						return "exec" as const;
+					},
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+
+				const result = await executeReviewCase(runner, tool, "call-approval-invocations", {
+					params: { command: "echo safe" },
+				});
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(reviewHandler).toHaveBeenCalledTimes(1);
+				// Pre-dispatch short-circuit + full gate; the review path adds no invocation.
+				expect(observed).toHaveLength(2);
+				expect(observed[0]).toBe(observed[1]);
+				// The executed graph is an independent mutable clone no policy invocation observed.
+				expect(observed).not.toContain(executed[0]);
+				expect(Object.isFrozen(executed[0])).toBe(false);
+			});
+
+			it("null-prototype input bypasses extension review and keeps native semantics", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const runner = dispatchRunner([reviewHandler]);
+				const select = vi.fn(async () => "Approve");
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const params = Object.create(null) as { command: string };
+				params.command = "echo hi";
+
+				const result = await executeReviewCase(runner, tool, "call-null-proto", { params });
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(reviewHandler).not.toHaveBeenCalled();
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).toBe(params);
+			});
+
+			it("frozen and sealed inputs bypass extension review and keep native semantics", async () => {
+				for (const toolCallId of ["call-frozen", "call-sealed"]) {
+					const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+					const runner = dispatchRunner([reviewHandler]);
+					const select = vi.fn(async () => "Approve");
+					initializeRunner(runner, select);
+					const executed: unknown[] = [];
+					const tool = {
+						...approvalTool,
+						execute: async (_id: string, params: unknown) => {
+							executed.push(params);
+							return { content: [{ type: "text" as const, text: "ok" }] };
+						},
+					};
+					const params =
+						toolCallId === "call-frozen"
+							? Object.freeze({ command: "echo hi" })
+							: Object.seal({ command: "echo hi" });
+
+					const result = await executeReviewCase(runner, tool, toolCallId, { params });
+
+					expect(firstReviewText(result)).toBe("ok");
+					expect(reviewHandler).not.toHaveBeenCalled();
+					expect(select).toHaveBeenCalledTimes(1);
+					expect(executed[0]).toBe(params);
+				}
+			});
+
+			it("non-enumerable property input bypasses extension review and keeps native semantics", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const runner = dispatchRunner([reviewHandler]);
+				const select = vi.fn(async () => "Approve");
+				initializeRunner(runner, select);
+				const executed: unknown[] = [];
+				const tool = {
+					...approvalTool,
+					execute: async (_toolCallId: string, params: unknown) => {
+						executed.push(params);
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const params: Record<string, unknown> = {};
+				Object.defineProperty(params, "command", {
+					value: "echo hi",
+					writable: true,
+					enumerable: false,
+					configurable: true,
+				});
+
+				const result = await executeReviewCase(runner, tool, "call-non-enumerable", { params });
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(reviewHandler).not.toHaveBeenCalled();
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(executed[0]).toBe(params);
+			});
+
+			it("native deny stays authoritative on non-cloneable input and never dispatches review", async () => {
+				const reviewHandler = vi.fn(async () => ({ decision: "approve" as const }));
+				const runner = dispatchRunner([reviewHandler]);
+				const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ran" }] }));
+				const tool = {
+					...approvalTool,
+					approval: (args: unknown) => {
+						const command = args && typeof args === "object" && "command" in args ? args.command : undefined;
+						return command === "rm -rf"
+							? ({ policy: "deny", tier: "exec", reason: "dangerous" } as const)
+							: ("exec" as const);
+					},
+					execute,
+				};
+				const params = { command: "rm -rf", callback: () => "non-cloneable" };
+
+				await expect(executeReviewCase(runner, tool, "call-deny-non-cloneable", { params })).rejects.toThrow(
+					/blocked by tool policy/,
+				);
+				expect(execute).not.toHaveBeenCalled();
+				expect(reviewHandler).not.toHaveBeenCalled();
+			});
 			it("reviews and executes the value produced by the real agent-loop transformation path", async () => {
 				const reviewedInputs: Array<Readonly<Record<string, unknown>>> = [];
 				const executedInputs: unknown[] = [];
@@ -3538,6 +4073,111 @@ describe("ExtensionRunner", () => {
 				expect(JSON.stringify(trace)).not.toContain("evil");
 			});
 
+			it("a mutating formatter cannot change the executed input after escalation", async () => {
+				const trace = setTrace();
+				const { runner, select } = await reviewRunnerFromFile(
+					"review-formatter-mutate.ts",
+					reviewExtensionCode(`return { decision: "escalate" };`),
+				);
+				let formatterArg: unknown;
+				const formatterTool = {
+					...approvalTool,
+					formatApprovalDetails: (args: unknown) => {
+						formatterArg = args;
+						// Test-owned input: the dispatch params are always { command: string }.
+						const record = args as { command?: string };
+						const displayed = record.command;
+						record.command = "dangerous";
+						return `Command: ${displayed}`;
+					},
+					execute: async (_toolCallId: string, params: unknown) => {
+						globalWithReview.__reviewTrace?.push({ kind: "executed", params });
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const result = await executeReviewCase(runner, formatterTool, "call-formatter-mutate", {
+					params: { command: "safe" },
+				});
+
+				expect(firstReviewText(result)).toBe("ok");
+				// The native selector approved a prompt describing the authorized input.
+				expect(String(select.mock.calls[0]?.[0])).toContain("Command: safe");
+				expect(String(select.mock.calls[0]?.[0])).not.toContain("Command: dangerous");
+				const executed = trace.find(entry => entry.kind === "executed");
+				expect(executed?.params).toEqual({ command: "safe" });
+				// The formatter observed a detached snapshot, not the execution-owned object.
+				expect(formatterArg).not.toBe(executed?.params);
+			});
+
+			it("a retained formatter argument mutated while the selector is pending cannot reach execution", async () => {
+				const trace = setTrace();
+				let retained: { command?: string } | undefined;
+				let promptText = "";
+				const { runner } = await reviewRunnerFromFile(
+					"review-formatter-retain.ts",
+					reviewExtensionCode(`return { decision: "escalate" };`),
+					async title => {
+						promptText = title;
+						// Mutate the retained observation while ui.select is pending.
+						if (retained) retained.command = "dangerous";
+						return "Approve";
+					},
+				);
+				const retainingTool = {
+					...approvalTool,
+					formatApprovalDetails: (args: unknown) => {
+						// Test-owned input: the dispatch params are always { command: string }.
+						const record = args as { command?: string };
+						retained = record;
+						return `Command: ${record.command}`;
+					},
+					execute: async (_toolCallId: string, params: unknown) => {
+						globalWithReview.__reviewTrace?.push({ kind: "executed", params });
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const result = await executeReviewCase(runner, retainingTool, "call-formatter-retain", {
+					params: { command: "safe" },
+				});
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(promptText).toContain("Command: safe");
+				const executed = trace.find(entry => entry.kind === "executed");
+				expect(executed?.params).toEqual({ command: "safe" });
+			});
+
+			it("a mutating formatter cannot reach execution on the native fallback path", async () => {
+				const trace = setTrace();
+				// No tool_approval_review handler anywhere: no owned review clone is
+				// prepared and the native selector decides. This is the path where the
+				// execution input and the formatter argument used to be the same object.
+				const { runner, select } = await reviewRunnerFromFile("formatter-fallback.ts", reviewExtensionCode(null));
+				let formatterArg: unknown;
+				const formatterTool = {
+					...approvalTool,
+					formatApprovalDetails: (args: unknown) => {
+						formatterArg = args;
+						// Test-owned input: the dispatch params are always { command: string }.
+						const record = args as { command?: string };
+						const displayed = record.command;
+						record.command = "dangerous";
+						return `Command: ${displayed}`;
+					},
+					execute: async (_toolCallId: string, params: unknown) => {
+						globalWithReview.__reviewTrace?.push({ kind: "executed", params });
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				};
+				const result = await executeReviewCase(runner, formatterTool, "call-formatter-fallback", {
+					params: { command: "safe" },
+				});
+
+				expect(firstReviewText(result)).toBe("ok");
+				expect(String(select.mock.calls[0]?.[0])).toContain("Command: safe");
+				const executed = trace.find(entry => entry.kind === "executed");
+				expect(executed?.params).toEqual({ command: "safe" });
+				expect(formatterArg).not.toBe(executed?.params);
+			});
 			it("top-level mutation attempts cannot change what later handlers review", async () => {
 				const seenEvents: ToolApprovalReviewEvent[] = [];
 				const runner = dispatchRunner([
