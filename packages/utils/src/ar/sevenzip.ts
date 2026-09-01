@@ -107,7 +107,6 @@ interface FileMetadata {
 }
 
 function readBoolVector(reader: HeaderReader, count: number): boolean[] {
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const result = new Array<boolean>(count);
 	let byte = 0;
 	let mask = 0;
@@ -123,16 +122,12 @@ function readBoolVector(reader: HeaderReader, count: number): boolean[] {
 }
 
 function readDefinedVector(reader: HeaderReader, count: number): boolean[] {
-	if (reader.readByte() !== 0) {
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
-		return new Array<boolean>(count).fill(true);
-	}
+	if (reader.readByte() !== 0) return new Array<boolean>(count).fill(true);
 	return readBoolVector(reader, count);
 }
 
 function readDigests(reader: HeaderReader, count: number): Digests {
 	const defined = readDefinedVector(reader, count);
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const values = new Array<number | undefined>(count);
 	for (let index = 0; index < count; index++) if (defined[index]) values[index] = reader.readUInt32();
 	return { defined, values };
@@ -234,10 +229,7 @@ function parsePackInfo(reader: HeaderReader, streams: SevenZipStreams, options: 
 		} else reader.skipSizedProperty();
 	}
 	if (streams.packSizes.length !== count) throw new ArchiveError("Invalid 7z PackInfo without complete sizes");
-	if (streams.packCrcs.length === 0) {
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
-		streams.packCrcs = new Array(count).fill(undefined);
-	}
+	if (streams.packCrcs.length === 0) streams.packCrcs = new Array(count).fill(undefined);
 }
 
 function parseUnpackInfo(reader: HeaderReader, streams: SevenZipStreams, options: FormatReadOptions): void {
@@ -262,7 +254,6 @@ function parseUnpackInfo(reader: HeaderReader, streams: SevenZipStreams, options
 }
 
 function parseSubStreamsInfo(reader: HeaderReader, streams: SevenZipStreams): void {
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const counts = new Array<number>(streams.folders.length).fill(1);
 	let sizes: number[] | undefined;
 	let rawDigests: Digests | undefined;
@@ -407,7 +398,6 @@ function parseNames(reader: HeaderReader, count: number, external: Uint8Array[],
 function parseTimes(reader: HeaderReader, count: number, external: Uint8Array[]): Array<number | undefined> {
 	const defined = readDefinedVector(reader, count);
 	const values = selectPropertyStream(reader, external);
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const result = new Array<number | undefined>(count);
 	for (let index = 0; index < count; index++)
 		if (defined[index]) {
@@ -421,7 +411,6 @@ function parseTimes(reader: HeaderReader, count: number, external: Uint8Array[])
 function parseAttributes(reader: HeaderReader, count: number, external: Uint8Array[]): Array<number | undefined> {
 	const defined = readDefinedVector(reader, count);
 	const values = selectPropertyStream(reader, external);
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const result = new Array<number | undefined>(count);
 	for (let index = 0; index < count; index++) if (defined[index]) result[index] = values.readUInt32();
 	return result;
@@ -431,15 +420,11 @@ function parseFilesInfo(reader: HeaderReader, external: Uint8Array[], options: F
 	const count = reader.readNumber("file count");
 	assertEntryCount(count, options.limits);
 	const metadata: FileMetadata = {
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		names: new Array<string>(count).fill(""),
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		emptyStreams: new Array<boolean>(count).fill(false),
 		emptyFiles: [],
 		antiFiles: [],
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		mtimes: new Array<number | undefined>(count),
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		attributes: new Array<number | undefined>(count),
 	};
 	for (;;) {

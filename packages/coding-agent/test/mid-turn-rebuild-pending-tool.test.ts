@@ -53,6 +53,7 @@ function createFixture(opts: { isStreaming: boolean }) {
 		sessionManager: { getCwd: () => process.cwd() },
 		isStreaming: opts.isStreaming,
 	};
+	let helpers!: UiHelpers;
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
@@ -77,7 +78,7 @@ function createFixture(opts: { isStreaming: boolean }) {
 		setTodos: vi.fn(),
 		showWarning: vi.fn(),
 	} as unknown as InteractiveModeContext;
-	const helpers = new UiHelpers(ctx);
+	helpers = new UiHelpers(ctx);
 	return { ctx, helpers, chatContainer };
 }
 

@@ -1,5 +1,5 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { sendDesktopNotification, shouldDeliverDesktopNotification } from "./desktop-notify";
 import {
 	detectKittyUnicodePlaceholdersSupport,
@@ -9,11 +9,9 @@ import {
 	renderKittyPlaceholderLines,
 	setKittyGraphics,
 } from "./kitty-graphics";
-import { isInsideTerminalMultiplexer } from "./terminal-multiplexer";
 import { isInsideTmux, wrapTmuxPassthrough, wrapTmuxPassthroughIfNeeded } from "./tmux";
 import type { HangulCompatibilityJamoWidth } from "./utils";
 
-export * from "./terminal-multiplexer";
 export { isInsideTmux, wrapTmuxPassthrough } from "./tmux";
 
 export enum ImageProtocol {
@@ -192,6 +190,19 @@ export class TerminalInfo {
 			sendDesktopNotification(message);
 		}
 	}
+}
+
+/** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
+export function isInsideTerminalMultiplexer(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	// TMUX/STY/ZELLIJ, Herdr, and CMUX workspace/surface/remote-transport
+	// markers are authoritative session signals. TERM can also survive when those are
+	// stripped (`sudo` without -E, `su`, env-sanitizing launchers/ssh). Do not
+	// use CMUX_SOCKET_PATH here: it is a CLI socket override and can be set
+	// outside a CMUX terminal.
+	if (env.TMUX || env.STY || env.ZELLIJ || env.HERDR_ENV === "1") return true;
+	if (env.CMUX_WORKSPACE_ID || env.CMUX_SURFACE_ID || env.CMUX_REMOTE_TRANSPORT) return true;
+	const term = env.TERM?.toLowerCase() ?? "";
+	return term.startsWith("tmux") || term.startsWith("screen");
 }
 
 /**
@@ -458,7 +469,8 @@ export function resolveWarpImageProtocol(
 	platform: NodeJS.Platform = process.platform,
 	env: NodeJS.ProcessEnv = Bun.env,
 ): ImageProtocol | null {
-	const windowsHost = platform === "win32" || isWsl(platform, env);
+	const windowsHost =
+		platform === "win32" || (platform === "linux" && Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP));
 	return windowsHost ? null : ImageProtocol.Kitty;
 }
 
@@ -477,9 +489,9 @@ export function isPaseoEmbedder(env: NodeJS.ProcessEnv = Bun.env): boolean {
 /**
  * Resolve the image protocol for a non-forced runtime: static per-terminal
  * support (with Warp's platform carve-out), then the multiplexer fallback,
- * then host carve-outs. `isTTY` is injectable because the fallback only fires
- * on a real TTY — a piped subprocess cannot exercise that path, so regression
- * tests call this directly.
+ * then the Paseo embedder carve-out. `isTTY` is injectable because the
+ * fallback only fires on a real TTY — a piped subprocess cannot exercise
+ * that path, so regression tests call this directly.
  */
 export function resolveImageProtocol(
 	terminalId: TerminalId,
@@ -502,12 +514,6 @@ export function resolveImageProtocol(
 	// pane cannot restore Kitty via getFallbackImageProtocol
 	// (getpaseo/paseo#3850).
 	if (imageProtocol !== null && isPaseoEmbedder(env)) {
-		return null;
-	}
-	// Herdr owns the pane grid but does not expose whether the attached client
-	// enabled its experimental Kitty renderer. Outer-terminal identity variables
-	// can leak into the pane, so only the explicit protocol override is safe.
-	if (imageProtocol !== null && env.HERDR_ENV === "1") {
 		return null;
 	}
 	return imageProtocol;

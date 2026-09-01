@@ -151,13 +151,8 @@ export class AdvisorEmissionGuard {
 	 * it to the dedupe history) — caller delivers the note. On `false` the
 	 * caller drops it.
 	 *
-	 * The single authority for the one-advise-per-update budget: called at the
-	 * moment a note is emitted, whether it is delivered live or held for a
-	 * deferred flush. A note that fails the noise/empty/dedupe filter never
-	 * consumes the budget, so a suppressed phrase cannot burn the update's slot
-	 * ahead of a substantive concern. Empty / whitespace-only notes are
-	 * suppressed defensively even though the tool-args contract requires a
-	 * non-empty string.
+	 * Empty / whitespace-only notes are suppressed; the model's
+	 * tool-args contract still requires a non-empty string but defense-in-depth.
 	 */
 	accept(note: string): boolean {
 		const key = normalizeAdvisorNote(note);

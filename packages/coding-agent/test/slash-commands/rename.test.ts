@@ -4,18 +4,18 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 
 function createRuntime() {
 	const handleRenameCommand = vi.fn(async () => {});
-	const showStatus = vi.fn();
+	const showError = vi.fn();
 	const setText = vi.fn();
 	const addToHistory = vi.fn();
 	return {
 		handleRenameCommand,
-		showStatus,
+		showError,
 		setText,
 		addToHistory,
 		runtime: {
 			ctx: {
 				editor: { setText, addToHistory } as unknown as InteractiveModeContext["editor"],
-				showStatus,
+				showError,
 				handleRenameCommand,
 			} as unknown as InteractiveModeContext,
 		},
@@ -33,13 +33,13 @@ describe("/rename slash command", () => {
 		expect(harness.handleRenameCommand).toHaveBeenCalledWith("my session");
 	});
 
-	it("reports usage for blank input without renaming", async () => {
+	it("handles a blank /rename invocation without error", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/rename   ", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showStatus).toHaveBeenCalledWith("Usage: /rename <title>");
+		expect(harness.showError).toHaveBeenCalledWith("Usage: /rename <title>");
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleRenameCommand).not.toHaveBeenCalled();
 	});

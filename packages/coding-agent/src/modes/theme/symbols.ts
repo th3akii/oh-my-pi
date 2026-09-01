@@ -45,9 +45,6 @@ export type SymbolKey =
 	| "boxRound.bottomRight"
 	| "boxRound.horizontal"
 	| "boxRound.vertical"
-	// Box Drawing - Dotted (selection outlines)
-	| "boxDotted.horizontal"
-	| "boxDotted.vertical"
 	// Box Drawing - Sharp
 	| "boxSharp.topLeft"
 	| "boxSharp.topRight"
@@ -96,7 +93,6 @@ export type SymbolKey =
 	| "icon.cost"
 	| "icon.subscription"
 	| "icon.advisor"
-	| "icon.advisorClosed"
 	| "icon.time"
 	| "icon.omp"
 	| "icon.esc"
@@ -396,9 +392,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"boxRound.bottomRight": "╯",
 	"boxRound.horizontal": "─",
 	"boxRound.vertical": "│",
-	// Box (dotted)
-	"boxDotted.horizontal": "┄",
-	"boxDotted.vertical": "┆",
 	// Box (sharp)
 	"boxSharp.topLeft": "┌",
 	"boxSharp.topRight": "┐",
@@ -448,7 +441,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.cost": "💲",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "👁",
-	"icon.advisorClosed": "🙈",
 	"icon.time": "⏱",
 	"icon.omp": "π",
 	"icon.esc": "⎋",
@@ -698,11 +690,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"boxRound.horizontal": "─",
 	// pick: │ | alt: ┃ ║ ▏
 	"boxRound.vertical": "│",
-	// Box Drawing - Dotted (same as unicode)
-	// pick: ┄ | alt: ╌ ┈ ⋯
-	"boxDotted.horizontal": "┄",
-	// pick: ┆ | alt: ╎ ┊ ⋮
-	"boxDotted.vertical": "┆",
 	// Box Drawing - Sharp (same as unicode)
 	// pick: ┌ | alt: ┏ ╭ ╔
 	"boxSharp.topLeft": "┌",
@@ -794,8 +781,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.subscription": "\u{f067a}",
 	// pick:  (nf-cod-eye)
 	"icon.advisor": "\uea70",
-	// pick:  (nf-oct-eye_closed)
-	"icon.advisorClosed": "\ueae7",
 	// pick:  | alt: ◷ ◴
 	"icon.time": "\uf017",
 	// pick: 󰵗 (nf-md-pi) | alt:  π ∏ ∑
@@ -1099,9 +1084,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"boxRound.bottomRight": "+",
 	"boxRound.horizontal": "-",
 	"boxRound.vertical": "|",
-	// Box Drawing - Dotted (ASCII fallback)
-	"boxDotted.horizontal": "-",
-	"boxDotted.vertical": ":",
 	// Box Drawing - Sharp (ASCII fallback)
 	"boxSharp.topLeft": "+",
 	"boxSharp.topRight": "+",
@@ -1150,7 +1132,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.cost": "$",
 	"icon.subscription": "(sub)",
 	"icon.advisor": "(adv)",
-	"icon.advisorClosed": "(adv)",
 	"icon.time": "t:",
 	"icon.omp": "pi",
 	"icon.esc": "esc",

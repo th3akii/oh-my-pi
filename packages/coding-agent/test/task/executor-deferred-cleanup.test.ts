@@ -57,7 +57,6 @@ function mockSession(opts: {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const state = { messages: [] as AssistantMessage[] };
 	const emit = (event: AgentSessionEvent) => {
-		// oxlint-disable-next-line unicorn/no-useless-spread -- listeners may change during dispatch
 		for (const l of [...listeners]) l(event);
 	};
 	return {

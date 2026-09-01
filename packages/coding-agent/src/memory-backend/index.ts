@@ -1,4 +1,9 @@
-export type { MnemopiBackendConfig, MnemopiLlmMode, MnemopiProviderOptions, MnemopiScoping } from "../mnemopi/config";
+export type {
+	MnemopiBackendConfig,
+	MnemopiLlmMode,
+	MnemopiProviderOptions,
+	MnemopiScoping,
+} from "../mnemopi/config";
 export type {
 	MnemopiMemoryEditOperation,
 	MnemopiMemoryEditOptions,

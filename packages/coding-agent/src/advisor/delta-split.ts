@@ -37,7 +37,6 @@ export const ADVISOR_RENDER_OPTIONS = {
 	watchedRoles: true,
 	expandPrimaryContext: true,
 	expandEditDiffs: true,
-	expandToolIO: true,
 } as const;
 
 export interface RenderAdvisorDeltaChunksOptions {
@@ -67,9 +66,6 @@ export function renderAdvisorDeltaChunks(
 			toolResultIndex: resultsByCallId,
 			consumedToolCallIds: consumed,
 			watchedRoleState,
-			transformExpandedToolIO: opts.obfuscator
-				? text => opts.obfuscator!.obfuscate(text, opts.advisorRegexSecretValues)
-				: undefined,
 		});
 
 	const heading = "### Session update";

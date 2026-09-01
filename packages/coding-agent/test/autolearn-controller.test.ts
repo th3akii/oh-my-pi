@@ -41,7 +41,6 @@ class FakeSession {
 	}
 
 	emit(event: AgentSessionEvent): void {
-		// oxlint-disable-next-line unicorn/no-useless-spread -- listeners may change during dispatch
 		for (const listener of [...this.listeners]) listener(event);
 	}
 
@@ -498,7 +497,8 @@ describe("isolated auto-learn capture", () => {
 			["capture-transport", "account-other"],
 		]);
 		const resolvedAffinities: string[] = [];
-		const sourceAgent = new Agent({
+		let sourceAgent: Agent;
+		sourceAgent = new Agent({
 			sessionId: "primary-affinity",
 			getApiKey: () => async () => {
 				const affinity = sourceAgent.sessionId ?? "";

@@ -168,7 +168,7 @@ export class Text implements Component {
 
 		const result = [...emptyLines, ...contentLines, ...emptyLines];
 		if (resultWidths !== undefined) {
-			// oxlint-disable-next-line unicorn/no-new-array -- line-width allocation
+			// Pad rows are exactly `width` cells wide.
 			const emptyWidths = new Array<number>(emptyLines.length).fill(width);
 			publishLineWidths(result, [...emptyWidths, ...resultWidths, ...emptyWidths]);
 		}

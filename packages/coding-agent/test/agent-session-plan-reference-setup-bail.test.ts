@@ -126,6 +126,7 @@ describe("AgentSession plan-reference delivery tracking (issue #4094)", () => {
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 
+		let session: AgentSession;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -143,7 +144,7 @@ describe("AgentSession plan-reference delivery tracking (issue #4094)", () => {
 			},
 		});
 
-		const session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 
 		cleanups.push(() => session.dispose());
 		return { session, sessionManager, observedCalls };

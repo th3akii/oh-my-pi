@@ -1,12 +1,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
-import { $which, isWsl, logger } from "@oh-my-pi/pi-utils";
+import { $which, logger } from "@oh-my-pi/pi-utils";
 
 const URL_SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
 
 function getExistingWslLocalPath(urlOrPath: string): string | undefined {
-	if (!isWsl() || !$which("wslview")) {
+	if (
+		process.platform !== "linux" ||
+		!(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) ||
+		!$which("wslview")
+	) {
 		return undefined;
 	}
 

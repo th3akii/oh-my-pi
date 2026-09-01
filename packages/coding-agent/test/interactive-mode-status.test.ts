@@ -18,6 +18,7 @@ function renderContainer(container: Container, width = 120): string {
 }
 
 function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: UiHelpers } {
+	let helpers: UiHelpers;
 	const ctx = {
 		chatContainer: new Container(),
 		pendingMessagesContainer: new Container(),
@@ -62,7 +63,7 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 	} as unknown as InteractiveModeContext;
-	const helpers = new UiHelpers(ctx);
+	helpers = new UiHelpers(ctx);
 	return { ctx, helpers };
 }
 

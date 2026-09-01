@@ -82,25 +82,22 @@ describe("issue #6767 /usage output during streaming", () => {
 		resetSettingsForTest();
 	});
 
-	it("opens the usage dashboard overlay without touching the transcript, even mid-stream", async () => {
+	it("defers the usage panel until the active turn ends, mounting it once", async () => {
 		const streamedReply = new Text("agent is streaming", 0, 0);
 		mode.chatContainer.addChild(streamedReply);
-		const showDashboard = vi.fn();
-		mode.showUsageDashboard = showDashboard;
 
 		await mode.handleUsageCommand(usageReports);
 
-		// /usage renders as an overlay (the /settings idiom): nothing may mount
-		// into the transcript, mid-stream or otherwise — mounting above the
-		// growing live block is what duplicated in native scrollback (#6767).
-		expect(showDashboard).toHaveBeenCalledTimes(1);
-		expect(showDashboard).toHaveBeenCalledWith(usageReports);
+		// Mid-stream: the finalized panel must NOT mount above the growing live
+		// block (that is what duplicates in native scrollback — issue #6767).
 		expect(mode.chatContainer.children).toEqual([streamedReply]);
 
 		streaming = false;
 		await mode.eventController.handleEvent({ type: "agent_end", messages: [] } as AgentSessionEvent);
 
-		// Turn end must not flush any deferred usage panel either.
-		expect(mode.chatContainer.children).toEqual([streamedReply]);
+		// streamedReply + the deferred usage panel (Spacer + Text).
+		expect(mode.chatContainer.children).toHaveLength(3);
+		const transcript = mode.chatContainer.render(80).join("\n");
+		expect(transcript.match(/Usage \(/g)).toHaveLength(1);
 	});
 });

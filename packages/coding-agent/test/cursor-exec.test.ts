@@ -59,9 +59,6 @@ function passthroughRunner(seen: string[] = []): ExtensionRunner {
 	return {
 		hasHandlers: () => true,
 		consumeToolCallEmitted: () => false,
-		runScoped<T>(fn: () => T): T {
-			return fn();
-		},
 		emitToolCall: async (event: { toolName: string }) => {
 			seen.push(event.toolName);
 			return undefined;

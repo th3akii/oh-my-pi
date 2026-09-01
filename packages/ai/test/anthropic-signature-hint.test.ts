@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
 	isInvalidThinkingSignatureError,
-	isThinkingPrefixBindingError,
 	maybeAddReplayUnsignedThinkingHint,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
@@ -31,8 +30,6 @@ function buildAnthropicMessagesModel(
 
 const SIGNATURE_400 =
 	'400 {"message":"messages.1.content.0: Invalid `signature` in `thinking` block","type":"invalid_request_error"}';
-const PREFIX_BINDING_400 =
-	'400 {"message":"messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \\"drop_block\\".","type":"invalid_request_error"}';
 
 describe("#4297 anthropic-messages replay-unsigned-thinking hint", () => {
 	it("recognises the Anthropic 400 invalid-thinking-signature body", () => {
@@ -43,13 +40,6 @@ describe("#4297 anthropic-messages replay-unsigned-thinking hint", () => {
 		// both because ZenMux / #4192 documents the failure this shorter way.
 		expect(isInvalidThinkingSignatureError("messages.1.content.0: Invalid `signature` in `thinking`")).toBe(true);
 		expect(isInvalidThinkingSignatureError("messages.1.content.0: Invalid signature in thinking")).toBe(true);
-	});
-
-	it("separates conversation binding failures from malformed signatures", () => {
-		expect(isThinkingPrefixBindingError(PREFIX_BINDING_400)).toBe(true);
-		expect(isThinkingPrefixBindingError(SIGNATURE_400)).toBe(false);
-		const model = buildAnthropicMessagesModel();
-		expect(maybeAddReplayUnsignedThinkingHint(model, PREFIX_BINDING_400)).toBe(PREFIX_BINDING_400);
 	});
 
 	it("does not fire on unrelated errors", () => {

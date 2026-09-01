@@ -17,7 +17,6 @@ import type {
 	MessageStats,
 	SessionEntry,
 	SessionMessageEntry,
-	SessionModelUsageEntry,
 	SessionServiceTierChangeEntry,
 	ToolCallStats,
 	ToolResultLink,
@@ -54,7 +53,7 @@ export function classifyAgentType(sessionPath: string): AgentType {
  * Session files are named like: --work--pi--/timestamp_uuid.jsonl
  * The folder part uses -- as path separator.
  */
-export function extractFolderFromPath(sessionPath: string): string {
+function extractFolderFromPath(sessionPath: string): string {
 	const sessionsDir = getSessionsDir();
 	const rel = path.relative(sessionsDir, sessionPath);
 	const projectDir = rel.split(path.sep)[0];
@@ -73,12 +72,6 @@ function isAssistantMessage(entry: SessionEntry): entry is SessionMessageEntry {
 	// constraint, so skip them at the parser boundary.
 	if (typeof msgEntry.id !== "string" || msgEntry.id.length === 0) return false;
 	return msgEntry.message?.role === "assistant";
-}
-
-function isModelUsage(entry: SessionEntry): entry is SessionModelUsageEntry {
-	if (entry.type !== "model_usage") return false;
-	const usageEntry = entry as SessionModelUsageEntry;
-	return typeof usageEntry.id === "string" && usageEntry.id.length > 0;
 }
 
 /**
@@ -227,38 +220,6 @@ function extractStats(
 	};
 }
 
-function extractModelUsageStats(
-	sessionFile: string,
-	folder: string,
-	entry: SessionModelUsageEntry,
-	agentType: AgentType,
-): MessageStats | null {
-	const timestamp = Date.parse(entry.timestamp);
-	return extractStats(
-		sessionFile,
-		folder,
-		{
-			type: "message",
-			id: entry.id,
-			parentId: entry.parentId,
-			timestamp: entry.timestamp,
-			message: {
-				role: "assistant",
-				content: [],
-				api: entry.api,
-				provider: entry.provider,
-				model: entry.model,
-				usage: entry.usage,
-				stopReason: entry.stopReason ?? "stop",
-				errorMessage: entry.errorMessage,
-				timestamp: Number.isFinite(timestamp) ? timestamp : 0,
-			},
-		},
-		undefined,
-		agentType,
-	);
-}
-
 /** Message timestamp, falling back to the entry's ISO timestamp, then 0. */
 function coerceEntryTimestamp(timestamp: number | undefined, entry: SessionMessageEntry): number {
 	if (typeof timestamp === "number" && Number.isFinite(timestamp)) return timestamp;
@@ -380,10 +341,6 @@ function parseSessionEntriesLenient(bytes: Uint8Array): { entries: SessionEntry[
 	const read = visitSessionEntriesLenient(bytes, entry => entries.push(entry));
 	return { entries, read };
 }
-/** Parse every well-formed entry in a transcript buffer (malformed lines skipped). */
-export function parseAllSessionEntries(bytes: Uint8Array): SessionEntry[] {
-	return parseSessionEntriesLenient(bytes).entries;
-}
 
 function scanLastServiceTier(bytes: Uint8Array): ServiceTierByFamily | undefined {
 	let currentServiceTier: ServiceTierByFamily | undefined;
@@ -457,11 +414,6 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 		if (isToolResultMessage(entry)) {
 			const link = extractToolResultLink(sessionPath, entry);
 			if (link) toolResults.push(link);
-			continue;
-		}
-		if (isModelUsage(entry)) {
-			const modelUsageStats = extractModelUsageStats(sessionPath, folder, entry, agentType);
-			if (modelUsageStats) stats.push(modelUsageStats);
 			continue;
 		}
 		if (isAssistantMessage(entry)) {

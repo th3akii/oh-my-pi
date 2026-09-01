@@ -6,7 +6,6 @@ export interface GallerySessionOptions {
 	contextTokens?: number;
 	fastMode?: boolean;
 	advisorStatus?: "running" | "quota_exhausted" | "error" | "paused";
-	advisorYielded?: boolean;
 	usingSubscription?: boolean;
 	cost?: number;
 	premiumRequests?: number;
@@ -70,10 +69,7 @@ export function createGallerySession(options: GallerySessionOptions = {}): Agent
 		}),
 		getAdvisorStatusOverview: () =>
 			options.advisorStatus
-				? {
-						configured: true,
-						advisors: [{ status: options.advisorStatus, yielded: options.advisorYielded ?? false }],
-					}
+				? { configured: true, advisors: [{ status: options.advisorStatus }] }
 				: { configured: false, advisors: [] },
 		getAdvisorCost: () => options.advisorCost ?? 0.08,
 		isAdvisorUsingSubscription: () => false,

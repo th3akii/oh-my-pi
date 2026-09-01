@@ -97,7 +97,6 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 				{ label: "advisor warning", session: { advisorStatus: "quota_exhausted" } },
 				{ label: "advisor error", session: { advisorStatus: "error" } },
 				{ label: "advisor paused", session: { advisorStatus: "paused" } },
-				{ label: "advisor done (yielded)", session: { advisorStatus: "running", advisorYielded: true } },
 			];
 		case "mode":
 			return [

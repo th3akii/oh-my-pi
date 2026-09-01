@@ -292,9 +292,10 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				};
 			}
 
+			let targets: string[];
 			let truncatedGlobTargets = false;
 			const resolvedTargets = await resolveDiagnosticTargets(file, this.session.cwd, MAX_GLOB_DIAGNOSTIC_TARGETS);
-			const targets = resolvedTargets.matches;
+			targets = resolvedTargets.matches;
 			truncatedGlobTargets = resolvedTargets.truncated;
 
 			if (targets.length === 0) {

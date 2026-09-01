@@ -42,7 +42,6 @@ const OPTS = {
 	watchedRoles: true,
 	expandPrimaryContext: true,
 	expandEditDiffs: true,
-	expandToolIO: true,
 	includeThinking: true,
 } as const;
 

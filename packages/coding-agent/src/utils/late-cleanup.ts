@@ -4,7 +4,8 @@ const pendingCleanups = new Set<Promise<void>>();
 
 /** Keep timed-out cleanup reachable until its resources really settle. */
 export function trackLateCleanup(work: Promise<void>, context: Record<string, unknown>): void {
-	const tracked = work
+	let tracked: Promise<void>;
+	tracked = work
 		.catch(error => {
 			logger.warn("Deferred cleanup failed", {
 				...context,

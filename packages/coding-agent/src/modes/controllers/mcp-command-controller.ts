@@ -854,7 +854,7 @@ export class MCPCommandController {
 		try {
 			parsedAuthUrl = new URL(authUrl);
 			new URL(tokenUrl);
-		} catch {
+		} catch (_error) {
 			throw new Error(
 				`Invalid OAuth URLs. Please check:\n  Authorization URL: ${authUrl}\n  Token URL: ${tokenUrl}`,
 			);

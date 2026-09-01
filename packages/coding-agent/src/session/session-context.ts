@@ -1,11 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import {
-	coerceServiceTierByFamily,
-	type OpenAIResponsesHistoryPayload,
-	type ServiceTierByFamily,
-} from "@oh-my-pi/pi-ai";
+import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
-import { isRecord } from "@oh-my-pi/pi-utils";
 import {
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
@@ -161,18 +156,18 @@ function snapcompactHistoryBlocksForContext(
 	return snapcompact.historyBlocks(archive, snapcompactHistoryBlockOptions(archive, options));
 }
 
-/** Reads validated OpenAI Responses replacement history from a compaction entry. */
 export function getOpenAiRemoteCompactionPayload(
 	compaction: CompactionEntry | null | undefined,
-): OpenAIResponsesHistoryPayload | undefined {
+): ProviderPayload | undefined {
 	const candidate = compaction?.preserveData?.openaiRemoteCompaction;
-	if (!isRecord(candidate)) return undefined;
-	if (typeof candidate.provider !== "string" || candidate.provider.length === 0) return undefined;
-	if (!Array.isArray(candidate.replacementHistory) || !candidate.replacementHistory.every(isRecord)) return undefined;
+	if (!candidate || typeof candidate !== "object") return undefined;
+	const remote = candidate as { provider?: unknown; replacementHistory?: unknown };
+	if (typeof remote.provider !== "string" || remote.provider.length === 0) return undefined;
+	if (!Array.isArray(remote.replacementHistory)) return undefined;
 	return {
 		type: "openaiResponsesHistory",
-		provider: candidate.provider,
-		items: candidate.replacementHistory,
+		provider: remote.provider,
+		items: remote.replacementHistory as Array<Record<string, unknown>>,
 	};
 }
 

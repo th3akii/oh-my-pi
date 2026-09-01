@@ -32,7 +32,6 @@ export async function mapWithConcurrencyLimit<T, R>(
 	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.floor(concurrency) : items.length;
 	const effectiveConcurrency = normalizedConcurrency > 0 ? normalizedConcurrency : items.length;
 	const limit = Math.max(1, Math.min(effectiveConcurrency, items.length));
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const results: (R | undefined)[] = new Array(items.length);
 	let nextIndex = 0;
 
@@ -104,7 +103,6 @@ export async function mapWithConcurrencyLimitAllSettled<T, R>(
 	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.floor(concurrency) : items.length;
 	const effectiveConcurrency = normalizedConcurrency > 0 ? normalizedConcurrency : items.length;
 	const limit = Math.max(1, Math.min(effectiveConcurrency, items.length));
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const results: (PromiseSettledResult<R> | undefined)[] = new Array(items.length);
 	const workerSignal = signal ?? new AbortController().signal;
 	let nextIndex = 0;

@@ -66,9 +66,6 @@ const compat: ResolvedOpenAICompat = {
 	zaiReasoningEffortDialect: false,
 	clampOutputToModelMax: false,
 	stripImageInput: false,
-	rejectRootObjectUnion: false,
-	retryWithoutStrictOnGrammarError: false,
-	supportsPromptCacheKey: false,
 };
 
 function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessage {

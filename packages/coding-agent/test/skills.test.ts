@@ -663,10 +663,10 @@ describe("parseSkillInvocation", () => {
 				name: "reviewer",
 				args: "$echo",
 			});
-			// oxlint-disable-next-line no-template-curly-in-string -- testing literal string containing shell variable
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: testing literal string containing shell variable
 			expect(parseSkillInvocation("${HOME}/bin /skill:foo")).toEqual({
 				name: "foo",
-				// oxlint-disable-next-line no-template-curly-in-string -- testing literal string containing shell variable
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: testing literal string containing shell variable
 				args: "${HOME}/bin",
 			});
 		});

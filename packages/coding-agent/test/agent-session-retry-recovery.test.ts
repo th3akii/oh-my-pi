@@ -171,7 +171,8 @@ describe("AgentSession retry recovery", () => {
 
 		const mock = createMockModel();
 		const requestedKeys: string[] = [];
-		const agent = new Agent({
+		let agent!: Agent;
+		agent = new Agent({
 			getApiKey: requestedModel => modelRegistry.resolver(requestedModel, agent.sessionId),
 			initialState: {
 				model,

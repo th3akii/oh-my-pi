@@ -269,6 +269,7 @@ describe("UiHelpers.renderSessionContext turn elapsed", () => {
 	});
 
 	function makeHarness(turnTimeOn: boolean): { ctx: InteractiveModeContext; helpers: UiHelpers } {
+		let helpers: UiHelpers;
 		const ctx = {
 			chatContainer: new Container(),
 			transcriptMessageComponents: new WeakMap(),
@@ -295,7 +296,7 @@ describe("UiHelpers.renderSessionContext turn elapsed", () => {
 			hideThinkingBlock: false,
 			clearTransientSessionUi: () => {},
 		} as unknown as InteractiveModeContext;
-		const helpers = new UiHelpers(ctx);
+		helpers = new UiHelpers(ctx);
 		return { ctx, helpers };
 	}
 
@@ -329,6 +330,7 @@ describe("focus-attach mid-turn keeps the prompt→yield delta", () => {
 	function createFixture() {
 		const chatContainer = new TranscriptContainer();
 		chatContainer.setToolActivityVisible(true);
+		let helpers!: UiHelpers;
 		const ui = {
 			requestRender: vi.fn(),
 			requestComponentRender: vi.fn(),
@@ -382,7 +384,7 @@ describe("focus-attach mid-turn keeps the prompt→yield delta", () => {
 		} as unknown as InteractiveModeContext;
 		const controller = new EventController(ctx);
 		ctx.eventController = controller;
-		const helpers = new UiHelpers(ctx);
+		helpers = new UiHelpers(ctx);
 		return { controller, helpers, chatContainer, viewSession };
 	}
 

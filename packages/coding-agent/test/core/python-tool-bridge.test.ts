@@ -89,7 +89,7 @@ describe("Python tool bridge HTTP server", () => {
 
 	it("surfaces tool errors as ok=false with the error message", async () => {
 		const session = {
-			getToolByName: () =>
+			getToolByName: (_: string) =>
 				({
 					name: "boom",
 					label: "boom",

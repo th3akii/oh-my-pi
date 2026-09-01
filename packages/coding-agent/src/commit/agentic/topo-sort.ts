@@ -2,7 +2,6 @@ import type { SplitCommitGroup } from "./state";
 
 export function computeDependencyOrder(groups: SplitCommitGroup[]): number[] | { error: string } {
 	const total = groups.length;
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const inDegree = new Array<number>(total).fill(0);
 	const edges = Array.from({ length: total }, () => new Set<number>());
 

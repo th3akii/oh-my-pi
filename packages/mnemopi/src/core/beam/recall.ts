@@ -442,7 +442,6 @@ function ftsQuery(query: string, useSynonyms = true): string {
 }
 
 function placeholders(count: number): string {
-	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	return new Array<string>(count).fill("?").join(",");
 }
 
@@ -601,7 +600,6 @@ function parseEmbedding(raw: unknown): number[] | null {
 	try {
 		const parsed = JSON.parse(raw) as unknown;
 		if (!Array.isArray(parsed)) return null;
-		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		const vector = new Array<number>(parsed.length);
 		for (let i = 0; i < parsed.length; i += 1) {
 			const value = Number(parsed[i]);

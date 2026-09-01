@@ -83,11 +83,12 @@ function createHarness(initialStreaming: boolean) {
 			scheduledFlushes.push(run);
 		},
 	});
+	let manager!: AsyncJobManager;
 	queue.register<AsyncEntry>("async-result", {
 		isStale: entry => manager.isDeliverySuppressed(entry.jobId),
 		build: buildAsyncMessage,
 	});
-	const manager = new AsyncJobManager({
+	manager = new AsyncJobManager({
 		onJobComplete: (jobId, result, job) => {
 			if (manager.isDeliverySuppressed(jobId)) return;
 			queue.enqueue<AsyncEntry>("async-result", {

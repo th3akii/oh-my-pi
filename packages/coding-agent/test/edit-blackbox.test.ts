@@ -166,9 +166,7 @@ describe("edit parse-regression blackbox", () => {
 		});
 
 		const sloppyPath = await writeFixture("sloppy.ts");
-		const sloppyArg = {
-			input: '<SM:EDIT path="sloppy.ts">\n<SM:FIND>\n\treturn 1;\n</SM:FIND>\n<SM:PUT>\n\treturn (;\n</SM:PUT>',
-		};
+		const sloppyArg = { input: "§sloppy.ts\n\treturn ⟪1│(⟫;" };
 		await new EditTool(session, "sloppy").execute("sloppy", sloppyArg);
 		expected.push({
 			prev: SOURCE,

@@ -169,6 +169,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 
+		let session: AgentSession;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -197,7 +198,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 			},
 		});
 
-		const session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 
 		const waitForCall = (predicate: (call: ObservedPromptCall) => boolean) => {
 			const existing = observedCalls.find(predicate);

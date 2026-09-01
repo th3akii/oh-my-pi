@@ -1,4 +1,4 @@
-// oxlint-disable no-template-curly-in-string -- sample source-code strings intentionally contain literal placeholders.
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: sample source-code strings (read fixtures) intentionally contain literal ${...}.
 // Gallery fixtures for the filesystem tools (read, write, glob).
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";

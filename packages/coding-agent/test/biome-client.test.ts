@@ -6,9 +6,10 @@ import { BiomeClient } from "../src/lsp/clients/biome-client";
 import type { ServerConfig } from "../src/lsp/types";
 
 const tempDirs: string[] = [];
+const tempRoots: string[] = [];
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 
-function resolveRepoBiome(): string | null {
+function resolveRepoBiome(): string {
 	const platformPackages: Partial<Record<NodeJS.Platform, Partial<Record<NodeJS.Architecture, string[]>>>> = {
 		darwin: { arm64: ["cli-darwin-arm64"], x64: ["cli-darwin-x64"] },
 		linux: {
@@ -23,13 +24,14 @@ function resolveRepoBiome(): string | null {
 			return Bun.resolveSync(`@biomejs/${packageName}/${executable}`, repoRoot);
 		} catch {}
 	}
-	return Bun.which("biome");
+	throw new Error(`No repository Biome binary for ${process.platform}/${process.arch}`);
 }
 
 const repoBiome = resolveRepoBiome();
 
 afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { force: true, recursive: true })));
+	await Promise.all(tempRoots.splice(0).map(dir => fs.rm(dir, { force: true, recursive: true })));
 });
 
 async function makeTempDir(): Promise<string> {
@@ -86,32 +88,31 @@ describe("BiomeClient format", () => {
 		expect(await Bun.file(targetFile).text()).toBe(formatted);
 	});
 
-	test.skipIf(repoBiome === null)("formats config-included TypeScript with a real Biome", async () => {
-		const root = await fs.realpath(await makeTempDir());
-		await Bun.write(
-			path.join(root, "biome.json"),
-			JSON.stringify({ formatter: { enabled: true }, files: { includes: ["src/**/*.ts"] } }),
+	test("formats configured TypeScript with the repository Biome", async () => {
+		const scratchDir = await fs.mkdtemp(
+			path.join(repoRoot, "packages", "coding-agent", "src", "__biome_client_test__-"),
 		);
-		const targetFile = path.join(root, "src", "configured.ts");
+		tempDirs.push(scratchDir);
+		const targetFile = path.join(scratchDir, "configured.ts");
 		const unformatted = "export const configured:number=1\n";
 		await Bun.write(targetFile, unformatted);
 
-		const result = await new BiomeClient(biomeConfig(repoBiome as string), root).format(targetFile, unformatted);
+		const result = await new BiomeClient(biomeConfig(repoBiome), repoRoot).format(targetFile, unformatted);
 
 		expect(result).toBe("export const configured: number = 1;\n");
 	});
 
-	test.skipIf(repoBiome === null)("leaves config-excluded content unchanged with a real Biome", async () => {
-		const root = await fs.realpath(await makeTempDir());
-		await Bun.write(
-			path.join(root, "biome.json"),
-			JSON.stringify({ formatter: { enabled: true }, files: { includes: ["src/**/*.ts"] } }),
-		);
-		const targetFile = path.join(root, "excluded", "excluded.ts");
+	test("leaves config-excluded content unchanged with the repository Biome", async () => {
+		const excludedRoot = path.join(repoRoot, ".perf");
+		const createdRoot = await fs.mkdir(excludedRoot, { recursive: true });
+		if (createdRoot) tempRoots.push(excludedRoot);
+		const scratchDir = await fs.mkdtemp(path.join(excludedRoot, "biome-client-test-"));
+		tempDirs.push(scratchDir);
+		const targetFile = path.join(scratchDir, "excluded.ts");
 		const unformatted = "export const excluded:number=1\n";
 		await Bun.write(targetFile, unformatted);
 
-		const result = await new BiomeClient(biomeConfig(repoBiome as string), root).format(targetFile, unformatted);
+		const result = await new BiomeClient(biomeConfig(repoBiome), repoRoot).format(targetFile, unformatted);
 
 		expect(result).toBe(unformatted);
 	});
@@ -150,7 +151,7 @@ describe("BiomeClient lint", () => {
 		expect(Date.now() - started).toBeLessThan(2_000);
 	}, 5_000);
 
-	test.skipIf(repoBiome === null)("surfaces Biome 2.x --reporter=json diagnostics", async () => {
+	test("surfaces Biome 2.x --reporter=json diagnostics", async () => {
 		const tempDir = await makeTempDir();
 		await Bun.write(
 			path.join(tempDir, "biome.json"),
@@ -160,7 +161,7 @@ describe("BiomeClient lint", () => {
 		// `x == 2` triggers lint/suspicious/noDoubleEquals (a recommended rule).
 		await Bun.write(targetFile, "const x: number = 1;\nif (x == 2) {\n}\n");
 
-		const diagnostics = await new BiomeClient(biomeConfig(repoBiome as string), tempDir).lint(targetFile);
+		const diagnostics = await new BiomeClient(biomeConfig(repoBiome), tempDir).lint(targetFile);
 
 		const doubleEquals = diagnostics.find(d => d.code === "lint/suspicious/noDoubleEquals");
 		expect(doubleEquals).toBeDefined();
@@ -175,7 +176,7 @@ describe("BiomeClient lint", () => {
 		});
 	});
 
-	test.skipIf(repoBiome === null)("returns no diagnostics for a clean file", async () => {
+	test("returns no diagnostics for a clean file", async () => {
 		const tempDir = await makeTempDir();
 		await Bun.write(
 			path.join(tempDir, "biome.json"),
@@ -184,7 +185,7 @@ describe("BiomeClient lint", () => {
 		const targetFile = path.join(tempDir, "clean.ts");
 		await Bun.write(targetFile, "export const value = 1;\n");
 
-		const diagnostics = await new BiomeClient(biomeConfig(repoBiome as string), tempDir).lint(targetFile);
+		const diagnostics = await new BiomeClient(biomeConfig(repoBiome), tempDir).lint(targetFile);
 
 		expect(diagnostics).toEqual([]);
 	});

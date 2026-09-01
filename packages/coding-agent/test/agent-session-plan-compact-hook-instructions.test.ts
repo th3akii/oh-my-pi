@@ -97,6 +97,7 @@ describe("AgentSession plan-mode compaction hook contract (issue #4359)", () => 
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 
+		let session: AgentSession;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -144,7 +145,7 @@ describe("AgentSession plan-mode compaction hook contract (issue #4359)", () => 
 			// when an extensionRunner is present; the shim mirrors the no-op path.
 			emitBeforeAgentStart: async () => undefined,
 		};
-		const session = new AgentSession({
+		session = new AgentSession({
 			agent,
 			sessionManager,
 			settings,

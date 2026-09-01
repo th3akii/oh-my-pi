@@ -13,7 +13,8 @@ export interface OrchestratorBeam extends BeamMemoryState {
 }
 
 export interface OrchestrateRecallOptions
-	extends Omit<RecallOptions, "queryEmbedding">, Omit<PolyphonicRecallOptions, "queryEmbedding"> {
+	extends Omit<RecallOptions, "queryEmbedding">,
+		Omit<PolyphonicRecallOptions, "queryEmbedding"> {
 	readonly queryEmbedding?: readonly number[] | Float32Array | null;
 	readonly enhanced?: boolean;
 	readonly forcePolyphonic?: boolean;

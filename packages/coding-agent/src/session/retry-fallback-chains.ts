@@ -442,17 +442,13 @@ function getRetryFallbackEffectiveChain(
 	return chain;
 }
 
-/**
- * Return candidates after the current selector in an effective chain.
- * `wrapAround` additionally appends entries before the current selector,
- * without returning the current selector itself.
- */
+/** Return the candidates after the current selector in an effective chain. */
 export function findRetryFallbackCandidates(
 	context: RetryFallbackResolutionContext,
 	chainKey: string,
 	currentSelector: string,
 	currentModel?: Model | null,
-	options?: { allowMissingPrimary?: boolean; wrapAround?: boolean },
+	options?: { allowMissingPrimary?: boolean },
 ): RetryFallbackSelector[] {
 	const chain = getRetryFallbackEffectiveChain(
 		context,
@@ -478,19 +474,13 @@ export function findRetryFallbackCandidates(
 	const exactIndex = chain.findIndex(
 		selector => selector.raw === currentSelector || selector.raw === currentPlainSelector,
 	);
-	if (exactIndex >= 0) {
-		const candidatesAfter = chain.slice(exactIndex + 1);
-		return options?.wrapAround ? [...candidatesAfter, ...chain.slice(0, exactIndex)] : candidatesAfter;
-	}
+	if (exactIndex >= 0) return chain.slice(exactIndex + 1);
 	const baseIndex = currentBaseSelector
 		? chain.findIndex(selector => {
 				const selectorBase = formatRetryFallbackBaseSelector(selector);
 				return selectorBase === currentBaseSelector || selectorBase === currentPlainBaseSelector;
 			})
 		: -1;
-	if (baseIndex >= 0) {
-		const candidatesAfter = chain.slice(baseIndex + 1);
-		return options?.wrapAround ? [...candidatesAfter, ...chain.slice(0, baseIndex)] : candidatesAfter;
-	}
+	if (baseIndex >= 0) return chain.slice(baseIndex + 1);
 	return chain.slice(1);
 }

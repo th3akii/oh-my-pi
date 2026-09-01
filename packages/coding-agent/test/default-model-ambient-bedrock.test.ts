@@ -54,16 +54,13 @@ describe("issue #9967 default model with ambient Bedrock credentials", () => {
 		else process.env.AWS_BEARER_TOKEN_BEDROCK = savedBearerToken;
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
-	function getRelevantModels() {
-		return registry
-			.getAvailable()
-			.filter(model => model.provider === "amazon-bedrock" || model.provider === "anthropic");
-	}
 
 	test("prefers the concretely-authed provider over an ambient Bedrock default", () => {
 		// Without any AWS credentials, Bedrock is not available and Anthropic wins.
 		expect(authStorage.hasAuth("amazon-bedrock")).toBe(false);
-		const baseline = pickDefaultAvailableModel(getRelevantModels(), provider => registry.hasConcreteAuth(provider));
+		const baseline = pickDefaultAvailableModel(registry.getAvailable(), provider =>
+			registry.hasConcreteAuth(provider),
+		);
 		expect(baseline?.provider).toBe("anthropic");
 
 		// Ambient AWS source with no usable Bedrock access (would 403 on request).
@@ -75,7 +72,7 @@ describe("issue #9967 default model with ambient Bedrock credentials", () => {
 		expect(registry.hasConcreteAuth("amazon-bedrock")).toBe(false);
 		expect(registry.hasConcreteAuth("anthropic")).toBe(true);
 
-		const available = getRelevantModels();
+		const available = registry.getAvailable();
 		const bedrockIdx = available.findIndex(model => model.provider === "amazon-bedrock");
 		const anthropicIdx = available.findIndex(model => model.provider === "anthropic");
 		// Catalog order leads with Bedrock — the ordering that produced the bug.
@@ -97,7 +94,7 @@ describe("issue #9967 default model with ambient Bedrock credentials", () => {
 		expect(authStorage.hasAuth("amazon-bedrock")).toBe(true);
 		expect(registry.hasConcreteAuth("amazon-bedrock")).toBe(true);
 
-		const picked = pickDefaultAvailableModel(getRelevantModels(), provider => registry.hasConcreteAuth(provider));
+		const picked = pickDefaultAvailableModel(registry.getAvailable(), provider => registry.hasConcreteAuth(provider));
 		expect(picked?.provider).toBe("amazon-bedrock");
 	});
 });
