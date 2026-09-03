@@ -9,6 +9,7 @@ import * as os from "node:os";
 import path from "node:path";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { resolveAgentModelSelection } from "../config/model-resolver";
+import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { MCPManager } from "../mcp/manager";
@@ -41,7 +42,8 @@ import {
 	type SingleResult,
 	type StructuredSubagentOutput,
 } from "./types";
-import { type NestedRepoPatch, parseIsolationMode } from "./worktree";
+import type { WorkPoolYieldItem } from "./workpool-yield";
+import { type NestedRepoPatch, parseIsolationBackend } from "./worktree";
 
 /** Validation behavior requested for an effective output schema. */
 export type StructuredSubagentSchemaMode = "permissive" | "strict";
@@ -112,6 +114,10 @@ export interface StructuredSubagentRequest {
 	enableIrc?: boolean;
 	/** `0` disables executor wall-clock timeout. Undefined inherits settings. */
 	maxRuntimeMs?: number;
+	/** Kernel-defined tools explicitly exposed to this child. */
+	customTools?: CustomTool[];
+	/** Workpool items accepted by the child yield tool during this turn. */
+	workPoolYieldItems?: WorkPoolYieldItem[];
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 }
@@ -200,6 +206,9 @@ function createPlanModeAgent(agent: AgentDefinition): AgentDefinition {
 
 function assertPlanControlsAllowed(request: StructuredSubagentRequest, planMode: boolean): void {
 	if (!planMode) return;
+	if (request.customTools?.length) {
+		throw new StructuredSubagentError("preflight", "Eval-defined tools are unavailable in plan mode.");
+	}
 	const isolation = request.isolation;
 	if (
 		isolation &&
@@ -293,12 +302,12 @@ export async function resolveEffectiveSubagentPolicy(
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role.
 	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
-	const isolationMode = request.session.settings.get("task.isolation.mode");
+	const isolationEnabled = request.session.settings.get("task.isolation.enabled");
 	const isIsolated = request.isolation?.requested === true;
-	if (isIsolated && isolationMode === "none") {
+	if (isIsolated && !isolationEnabled) {
 		throw new StructuredSubagentError(
 			"preflight",
-			`Subagent isolated execution requires task.isolation.mode to be set; current mode is "none".`,
+			"Subagent isolated execution requires task.isolation.enabled; it is currently false.",
 		);
 	}
 	return {
@@ -434,6 +443,8 @@ function buildExecutorOptions(
 		settings: session.settings,
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
 		enableMCP,
+		customTools: request.customTools,
+		workPoolYieldItems: request.workPoolYieldItems,
 		contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
 		skills,
 		autoloadSkills,
@@ -596,7 +607,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			result = await runIsolatedSubprocess({
 				baseOptions,
 				context: isolationContext,
-				preferredBackend: parseIsolationMode(request.session.settings.get("task.isolation.mode")),
+				preferredBackend: parseIsolationBackend(request.session.settings.get("isolation.backend")),
 				agentId: id,
 				mergeMode: policy.mergeMode,
 				artifactsDir: lease.artifactsDir,
