@@ -79,6 +79,47 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 		expect(requestedUrls[0]).toBe("https://api.githubcopilot.com/chat/completions");
 	});
 
+	it("sends an explicit caller integration id on chat completions", async () => {
+		const requestedIntegrationIds: (string | null)[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requestedIntegrationIds.push(getRequestHeader(input, init, "Copilot-Integration-Id"));
+			return createUnauthorizedResponse();
+		});
+
+		const model = getBundledModel("github-copilot", "gpt-4o") as Model<"openai-completions">;
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: testToken,
+			fetch: fetchMock as unknown as typeof fetch,
+			headers: { "Copilot-Integration-Id": "vscode-chat" },
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(requestedIntegrationIds.length).toBeGreaterThan(0);
+		expect(requestedIntegrationIds.every(id => id === "vscode-chat")).toBe(true);
+	});
+
+	it("retries a denied chat-surface request once as the Copilot CLI", async () => {
+		const seenIntegrationIds: (string | null)[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			seenIntegrationIds.push(getRequestHeader(input, init, "Copilot-Integration-Id"));
+			return new Response(JSON.stringify({ error: { message: "denied" } }), {
+				status: 403,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		const model = getBundledModel("github-copilot", "gpt-4o") as Model<"openai-completions">;
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: testToken,
+			fetch: fetchMock as unknown as typeof fetch,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(seenIntegrationIds).toEqual(["copilot-chat", "copilot-developer-cli"]);
+		expect(result.errorMessage).toContain("GitHub Copilot access denied (HTTP 403)");
+	});
+
 	it("uses model baseUrl for responses API", async () => {
 		const requestedUrls: string[] = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -115,7 +156,34 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain('not available for integrator "opencode"');
 		expect(result.errorMessage).toContain("Available models: [gpt-4.1 claude-opus-4.7 gpt-5.5]");
-		expect(result.errorMessage).not.toContain("only part of its fleet");
+	});
+
+	it("surfaces chat completions model_not_supported after a single request", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						error: {
+							message: "The requested model is not supported.",
+							code: "model_not_supported",
+							param: "model",
+							type: "invalid_request_error",
+						},
+					}),
+					{ status: 400, headers: { "Content-Type": "application/json" } },
+				),
+		);
+
+		const model = getBundledModel("github-copilot", "gpt-4o") as Model<"openai-completions">;
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: testToken,
+			fetch: fetchMock as unknown as typeof fetch,
+		}).result();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorStatus).toBe(400);
+		expect(result.errorMessage).toContain("The requested model is not supported.");
 	});
 
 	it("omits OpenAI priority service tier while native OpenAI keeps it", async () => {
